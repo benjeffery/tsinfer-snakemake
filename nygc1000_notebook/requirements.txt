@@ -1,0 +1,7 @@
+git+https://github.com/tskit-dev/tsinfer.git@main
+git+https://github.com/pystatgen/sgkit.git@main
+aiohttp
+cyvcf2
+requests
+yarl
+jupyter
