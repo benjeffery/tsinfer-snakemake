@@ -6,3 +6,4 @@ requests
 yarl
 jupyter
 tskit==0.5.4
+pysam
