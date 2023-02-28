@@ -1,0 +1,12 @@
+vcf_files: ["data/chr22.vcf.gz"]
+data_dir: "data/workflow"
+temp_dir: "data/workflow/temp"
+
+
+
+
+custom_resources:
+  dask_cluster: 1
+
+prefix: ""
+#prefix: "module load python/3.8.2 && source tsinfer-env/bin/activate"

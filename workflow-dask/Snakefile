@@ -1,0 +1,56 @@
+import sgkit
+import sgkit.io.vcf
+import os.path
+from pathlib import Path
+from dask.distributed import Client
+
+configfile: "config.yaml"
+shell.prefix(config["prefix"])
+
+def make_dask_cluster():
+    c = Client()
+    print(c.dashboard_link)
+
+def vcf_name(vcf_file):
+    return os.path.basename(vcf_file).split(".")[0]
+
+vcfs={vcf_name(vcf_file):vcf_file for vcf_file in config["vcf_files"]}
+data_dir=Path(config['data_dir'])
+
+# These are quick steps that we don't want to run on the cluster
+localrules: all, vcf_to_zarrs, zarr_stats
+
+rule all:
+    input: expand(data_dir/"zarr_stats"/"{vcf_name}.stats", vcf_name=vcfs.keys())
+
+rule vcf_to_zarrs:
+    input:
+        vcf=lambda wildcards: vcfs[wildcards.vcf_name],
+        tbi=lambda wildcards: vcfs[wildcards.vcf_name]+".tbi"
+    output:
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}.zarr")
+    resources:
+        dask_cluster=1
+    params:
+        target_part_size="20M",
+        chunk_length=15_000,
+        chunk_width=2_000
+    run:
+        make_dask_cluster()
+        sgkit.io.vcf.vcf_reader.vcf_to_zarr(input[0], output[0], target_part_size=params.target_part_size, chunk_length=params.chunk_length, chunk_width=params.chunk_width, tempdir=config["temp_dir"])
+
+rule zarr_stats:
+    input:
+        data_dir/"zarr_vcfs"/"{vcf_name}.zarr"
+    output:
+        data_dir/"zarr_stats"/"{vcf_name}.stats"
+    resources:
+        dask_cluster=1
+    run:
+        make_dask_cluster()
+        ds = sgkit.load_dataset(input[0])
+        out = {}
+        out['dataset_summary'] = str(ds)
+        out['allele_counts'] = (ds.call_genotype == 1).sum(dim=['samples', 'ploidy']).to_numpy().tolist()
+        with open(output[0], "w") as f:
+            f.write(json.dumps(out))
