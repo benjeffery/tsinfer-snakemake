@@ -2,14 +2,21 @@ import sgkit
 import sgkit.io.vcf
 import os.path
 from pathlib import Path
-from dask.distributed import Client
+from dask.distributed import Client, performance_report
 
 configfile: "config.yaml"
 shell.prefix(config["prefix"])
 
 def make_dask_cluster():
-    c = Client()
-    print(c.dashboard_link)
+    # Make a dask cluster from the module.class string specified in config
+    cluster_class = config["cluster"]["class"]
+    cluster_module, cluster_class = cluster_class.rsplit(".", 1)
+    cluster_module = __import__(cluster_module, fromlist=[cluster_class])
+    cluster_class = getattr(cluster_module, cluster_class)
+    cluster = cluster_class(**config["cluster"].get("kwargs", {}))
+    if "adapt" in config["cluster"]:
+        cluster.adapt(**config["cluster"]["adapt"])
+    return Client(cluster)
 
 def vcf_name(vcf_file):
     return os.path.basename(vcf_file).split(".")[0]
@@ -21,29 +28,43 @@ data_dir=Path(config['data_dir'])
 localrules: all, vcf_to_zarrs, zarr_stats
 
 rule all:
-    input: expand(data_dir/"zarr_stats"/"{vcf_name}.stats", vcf_name=vcfs.keys())
+    input: expand(data_dir/"zarr_stats"/"{vcf_name}"/"stats.json", vcf_name=vcfs.keys())
 
 rule vcf_to_zarrs:
     input:
         vcf=lambda wildcards: vcfs[wildcards.vcf_name],
         tbi=lambda wildcards: vcfs[wildcards.vcf_name]+".tbi"
     output:
-        directory(data_dir/"zarr_vcfs"/"{vcf_name}.zarr")
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"),
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"performance_report.html"
     resources:
         dask_cluster=1
     params:
-        target_part_size="20M",
-        chunk_length=15_000,
-        chunk_width=2_000
+        target_part_size="5M",
+        read_chunk_length=10_000,
+        chunk_length=50_000,
+        chunk_width=3_000
     run:
-        make_dask_cluster()
-        sgkit.io.vcf.vcf_reader.vcf_to_zarr(input[0], output[0], target_part_size=params.target_part_size, chunk_length=params.chunk_length, chunk_width=params.chunk_width, tempdir=config["temp_dir"])
+        client = make_dask_cluster()
+        with performance_report(
+            filename=output[1]
+        ):
+            sgkit.io.vcf.vcf_reader.vcf_to_zarr(
+                input[0],
+                output[0],
+                target_part_size=params.target_part_size,
+                read_chunk_length=params.read_chunk_length,
+                chunk_length=params.chunk_length,
+                chunk_width=params.chunk_width,
+                tempdir=config["temp_dir"]
+            )
+
 
 rule zarr_stats:
     input:
-        data_dir/"zarr_vcfs"/"{vcf_name}.zarr"
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"
     output:
-        data_dir/"zarr_stats"/"{vcf_name}.stats"
+        data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
     resources:
         dask_cluster=1
     run:

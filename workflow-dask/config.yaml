@@ -3,7 +3,31 @@ data_dir: "data/workflow"
 temp_dir: "data/workflow/temp"
 
 
+dask:
+  distributed.scheduler.allowed-failures: 10
+  distributed.scheduler.worker-saturation: 1
 
+cluster:
+#  class: dask_jobqueue.LSFCluster
+#  kwargs:
+#      queue: "short"
+#      project: "gecip_lsf_access"
+#      cores: 1
+#      walltime: "03:59"
+#      memory: "15GB"
+#      use_stdin: True
+#      lsf_units: "MB"
+#      job_script_prolouge: ['#BSUB -R "rusage[mem=16000] span[hosts=1]"']
+#      worker_extra_args:
+#        - "--lifetime"
+#        - "230m"
+#        - "--lifetime-stagger"
+#        - "5m"
+#  adapt:
+#    maximum_jobs: 750
+#    minimum_jobs: 0
+#    wait_count: 10
+  class: dask.distributed.LocalCluster
 
 custom_resources:
   dask_cluster: 1
