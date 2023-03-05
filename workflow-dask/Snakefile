@@ -16,19 +16,30 @@ def make_dask_cluster():
     cluster = cluster_class(**config["cluster"].get("kwargs", {}))
     if "adapt" in config["cluster"]:
         cluster.adapt(**config["cluster"]["adapt"])
-    return Client(cluster)
+    print(f"Created cluster {cluster.__class__.__name__} at {cluster.dashboard_link}")
+    return cluster.scheduler_address
+scheduler_address = make_dask_cluster()
 
 def vcf_name(vcf_file):
     return os.path.basename(vcf_file).split(".")[0]
+
+def number_to_SI(number):
+    """Convert a number to a string with SI units"""
+    units = ["", "K", "M", "G", "T", "P", "E", "Z", "Y"]
+    unit = 0
+    while number > 1000:
+        number /= 1000
+        unit += 1
+    return f"{number:.2f}{units[unit]}"
 
 vcfs={vcf_name(vcf_file):vcf_file for vcf_file in config["vcf_files"]}
 data_dir=Path(config['data_dir'])
 
 # These are quick steps that we don't want to run on the cluster
-localrules: all, vcf_to_zarrs, zarr_stats
+localrules: all, vcf_to_zarrs, zarr_stats, summary_table
 
 rule all:
-    input: expand(data_dir/"zarr_stats"/"{vcf_name}"/"stats.json", vcf_name=vcfs.keys())
+    input: data_dir/"vcf_summary_table.csv"
 
 rule vcf_to_zarrs:
     input:
@@ -42,10 +53,11 @@ rule vcf_to_zarrs:
     params:
         target_part_size="5M",
         read_chunk_length=10_000,
+        temp_chunk_length=25_000,
         chunk_length=50_000,
         chunk_width=3_000
     run:
-        client = make_dask_cluster()
+        client = Client(scheduler_address)
         with performance_report(
             filename=output[1]
         ):
@@ -54,6 +66,7 @@ rule vcf_to_zarrs:
                 output[0],
                 target_part_size=params.target_part_size,
                 read_chunk_length=params.read_chunk_length,
+                temp_chunk_length=params.temp_chunk_length,
                 chunk_length=params.chunk_length,
                 chunk_width=params.chunk_width,
                 tempdir=config["temp_dir"]
@@ -68,10 +81,43 @@ rule zarr_stats:
     resources:
         dask_cluster=1
     run:
-        make_dask_cluster()
+        client = Client(scheduler_address)
         ds = sgkit.load_dataset(input[0])
         out = {}
         out['dataset_summary'] = str(ds)
+        out['name'] = ', '.join(ds.contigs)
+        out['n_samples'] = ds.dims['samples']
+        out['n_variants'] = ds.dims['variants']
+        out['n_ploidy'] = ds.dims['ploidy']
         out['allele_counts'] = (ds.call_genotype == 1).sum(dim=['samples', 'ploidy']).to_numpy().tolist()
         with open(output[0], "w") as f:
             f.write(json.dumps(out))
+
+rule summary_table:
+    input:
+        expand(data_dir/"zarr_stats"/"{vcf_name}"/"stats.json", vcf_name=vcfs.keys())
+    output:
+        data_dir/"vcf_summary_table.csv"
+    run:
+        with open(output[0], "w") as f:
+           f.write("vcf_name, n_variants, n_samples, ac0, ac1, ac2, full_nbytes, no_singletons_nbytes, half_no_singletons_nbytes\n")
+           for vcf_stats in input:
+              with open(vcf_stats, "r") as json_stats_f:
+                stats = json.load(json_stats_f)
+                ac1 = stats['allele_counts'][1]
+                n_sites = stats['n_variants']
+                n_samples = stats['n_samples']
+                n_ploidy = stats['n_ploidy']
+                f.write(f"{stats['name']}, ")
+                f.write(', '.join([str(number_to_SI(n)) for n in [
+                    n_sites,
+                    n_samples,
+                    stats['allele_counts'][0],
+                    ac1,
+                    stats['allele_counts'][2],
+                    n_sites*n_samples*n_ploidy,
+                    (n_sites-ac1)*n_samples*n_ploidy,
+                    (n_sites-ac1)*n_samples*n_ploidy*0.5,
+                ]]))
+                f.write('\n')
+
