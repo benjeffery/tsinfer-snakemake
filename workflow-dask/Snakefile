@@ -1,14 +1,15 @@
 import sgkit
 import sgkit.io.vcf
 import os.path
+import dask
 from pathlib import Path
 from dask.distributed import Client, performance_report
 
 configfile: "config.yaml"
 shell.prefix(config["prefix"])
 
-def vcf_name(vcf_file):
-    return os.path.basename(vcf_file).split(".")[0]
+for k,v in config["dask"].items():
+    dask.config.set({k:v})
 
 def number_to_SI(number):
     """Convert a number to a string with SI units"""
@@ -19,7 +20,6 @@ def number_to_SI(number):
         unit += 1
     return f"{number:.2f}{units[unit]}"
 
-vcfs={vcf_name(vcf_file):vcf_file for vcf_file in config["vcf_files"]}
 data_dir=Path(config['data_dir'])
 
 localrules: all, summary_table
@@ -29,8 +29,8 @@ rule all:
 
 rule vcf_to_zarrs:
     input:
-        vcf=lambda wildcards: vcfs[wildcards.vcf_name],
-        tbi=lambda wildcards: vcfs[wildcards.vcf_name]+".tbi"
+        vcf=lambda wildcards: config["vcfs"][wildcards.vcf_name]['vcf'],
+        tbi=lambda wildcards: config["vcfs"][wildcards.vcf_name]['vcf']+".tbi"
     output:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"),
         data_dir/"zarr_vcfs"/"{vcf_name}"/"performance_report.html"
@@ -41,7 +41,8 @@ rule vcf_to_zarrs:
         read_chunk_length=10_000,
         temp_chunk_length=20_000,
         chunk_length=60_000,
-        chunk_width=3_000
+        chunk_width=3_000,
+        retain_temp_files=True
     run:
         client = Client(config["scheduler_address"])
         with performance_report(
@@ -76,25 +77,51 @@ rule zarr_stats:
         out['n_variants'] = ds.dims['variants']
         out['n_ploidy'] = ds.dims['ploidy']
         out['allele_counts'] = (ds.call_genotype == 1).sum(dim=['samples', 'ploidy']).to_numpy().tolist()
-        def get_dir_size(directory):
-            total_size = 0
-            for dirpath, dirnames, filenames in os.walk(directory):
-                for f in filenames:
-                    fp = os.path.join(dirpath, f)
-                    total_size += os.path.getsize(fp)
-            return total_size
-        out['size'] = get_dir_size(input[0])
+        out['missing_count'] = int((ds.call_genotype == -1).sum().to_numpy())
+        out['tri_allele_and_above_count'] = int((ds.call_genotype > 1).sum().to_numpy())
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(input[0]):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                total_size += os.path.getsize(fp)
+        out['size'] = total_size
         with open(output[0], "w") as f:
             f.write(json.dumps(out))
 
+rule load_ancestral_fasta:
+    input:
+        lambda wildcards: config["vcfs"][wildcards.vcf_name]['ancestral_fasta'],
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"
+    output:
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_state")
+    run:
+        import pysam
+        fasta = pysam.FastaFile(input[0])
+        # NB! We put in an extra character at the start to convert to 1 based coords.
+        codec = 'utf-32-le' if sys.byteorder == 'little' else 'utf-32-be'
+        ancestral_sequence = "X" + fasta.fetch(reference=fasta.references[0])
+        ancestral_sequence = np.frombuffer(bytearray(ancestral_sequence,codec), dtype="U1")
+        # From the human ancestral states README:
+        # The convention for the sequence is:
+        #    ACTG : high-confidence call, ancestral state supported by other 2 sequences
+        #    actg : low-confidence call, ancestral state supported by one sequence only
+        #    N    : failure, the ancestral state is not supported by any other sequence
+        #    -    : the extant species contains an insertion at this position
+        #    .    : no coverage in the alignment
+        ds = sg.load_dataset(input[1])
+        ancestral_states = ancestral_sequence[ds['variant_position'].values]
+        ancestral_states = xr.DataArray(data=ancestral_states, dims=["variants"], name="variant_ancestral_state")
+        ds.update({"variant_ancestral_state": ancestral_states})
+        sg.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_ancestral_state"}), input[1], mode="a")
+
 rule summary_table:
     input:
-        expand(data_dir/"zarr_stats"/"{vcf_name}"/"stats.json", vcf_name=vcfs.keys())
+        expand(data_dir/"zarr_stats"/"{vcf_name}"/"stats.json", vcf_name=config["vcfs"].keys())
     output:
         data_dir/"vcf_summary_table.csv"
     run:
         with open(output[0], "w") as f:
-           f.write("vcf_name, zarr_size, n_variants, n_samples, ac0, ac1, ac2, full_nbytes, no_singletons_nbytes, half_no_singletons_nbytes\n")
+           f.write("vcf_name, zarr_size, n_variants, n_samples, ac0, ac1, ac2, missing_count, tri_allele_and_above_count, full_nbytes, no_singletons_nbytes, half_no_singletons_nbytes\n")
            for vcf_stats in input:
               with open(vcf_stats, "r") as json_stats_f:
                 stats = json.load(json_stats_f)
@@ -110,6 +137,8 @@ rule summary_table:
                     stats['allele_counts'][0],
                     ac1,
                     stats['allele_counts'][2],
+                    stats['missing_count'],
+                    stats['tri_allele_and_above_count'],
                     n_sites*n_samples*n_ploidy,
                     (n_sites-ac1)*n_samples*n_ploidy,
                     (n_sites-ac1)*n_samples*n_ploidy*0.5,

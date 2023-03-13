@@ -1,11 +1,15 @@
-vcf_files: ["data/chr22.vcf.gz"]
+vcfs:
+  chr22:
+    ancestral_fasta: data/homo_sapiens_ancestor_GRCh38/homo_sapiens_ancestor_22.fa
+    vcf: data/chr22.vcf.gz
+
 data_dir: "data/workflow"
 temp_dir: "data/workflow/temp"
 
 
 dask:
   distributed.scheduler.allowed-failures: 10
-  distributed.scheduler.worker-saturation: 1
+  distributed.scheduler.worker-saturation: 1.1
 
 # Cluster config used by the "snakemake-with-dask" script
 cluster:
