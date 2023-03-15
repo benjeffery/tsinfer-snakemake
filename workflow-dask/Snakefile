@@ -1,4 +1,6 @@
 import sgkit
+import numpy
+import xarray
 import sgkit.io.vcf
 import os.path
 import dask
@@ -11,28 +13,21 @@ shell.prefix(config["prefix"])
 for k,v in config["dask"].items():
     dask.config.set({k:v})
 
-def number_to_SI(number):
-    """Convert a number to a string with SI units"""
-    units = ["", "K", "M", "G", "T", "P", "E", "Z", "Y"]
-    unit = 0
-    while number > 1000:
-        number /= 1000
-        unit += 1
-    return f"{number:.2f}{units[unit]}"
-
 data_dir=Path(config['data_dir'])
 
-localrules: all, summary_table
+# Make dask tasks local
+localrules: all, summary_table, vcf_to_zarrs, zarr_stats, mask_sites
 
 rule all:
-    input: data_dir/"vcf_summary_table.csv"
+    input:
+        data_dir/"vcf_summary_table.csv"
 
 rule vcf_to_zarrs:
     input:
         vcf=lambda wildcards: config["vcfs"][wildcards.vcf_name]['vcf'],
         tbi=lambda wildcards: config["vcfs"][wildcards.vcf_name]['vcf']+".tbi"
     output:
-        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"),
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
         data_dir/"zarr_vcfs"/"{vcf_name}"/"performance_report.html"
     resources:
         dask_cluster=1
@@ -50,7 +45,7 @@ rule vcf_to_zarrs:
         ):
             sgkit.io.vcf.vcf_reader.vcf_to_zarr(
                 input[0],
-                output[0],
+                output[0].replace(".vcf_done", ""),
                 target_part_size=params.target_part_size,
                 read_chunk_length=params.read_chunk_length,
                 temp_chunk_length=params.temp_chunk_length,
@@ -58,29 +53,39 @@ rule vcf_to_zarrs:
                 chunk_width=params.chunk_width,
                 tempdir=config["temp_dir"]
             )
+        Path(str(output[0])).touch()
 
 
 rule zarr_stats:
     input:
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask"
+
     output:
         data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
     resources:
         dask_cluster=1
     run:
         client = Client(config["scheduler_address"])
-        ds = sgkit.load_dataset(input[0])
+        ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
         out = {}
         out['dataset_summary'] = str(ds)
         out['name'] = ', '.join(ds.contigs)
         out['n_samples'] = ds.dims['samples']
         out['n_variants'] = ds.dims['variants']
         out['n_ploidy'] = ds.dims['ploidy']
-        out['allele_counts'] = (ds.call_genotype == 1).sum(dim=['samples', 'ploidy']).to_numpy().tolist()
-        out['missing_count'] = int((ds.call_genotype == -1).sum().to_numpy())
-        out['tri_allele_and_above_count'] = int((ds.call_genotype > 1).sum().to_numpy())
+        #Flatten the ploidy dimension as tsinfer sees each phased haplotype as a sample
+        gt = (ds.call_genotype.stack(haplotype=("samples","ploidy")))
+        out['allele_counts'] = (gt > 0).sum(dim=['haplotype']).to_numpy().tolist()
+        out['missing_count'] = int((gt == -1).sum())
+        out['num_sites_triallelic'] = int(((gt > 1).sum(dim=["haplotype"]) > 0).sum())
+        out['sites_bad_ancestral'] = int((~ds.variant_bad_ancestral_mask).sum())
+        out['sites_duplicate_pos'] = int((~ds.variant_duplicate_position_mask).sum())
+        out['sites_masked'] = int((~ds.variant_mask).sum())
         total_size = 0
-        for dirpath, dirnames, filenames in os.walk(input[0]):
+        for dirpath, dirnames, filenames in os.walk(input[0].replace(".vcf_done", "")):
             for f in filenames:
                 fp = os.path.join(dirpath, f)
                 total_size += os.path.getsize(fp)
@@ -91,7 +96,7 @@ rule zarr_stats:
 rule load_ancestral_fasta:
     input:
         lambda wildcards: config["vcfs"][wildcards.vcf_name]['ancestral_fasta'],
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done"
     output:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_state")
     run:
@@ -100,7 +105,7 @@ rule load_ancestral_fasta:
         # NB! We put in an extra character at the start to convert to 1 based coords.
         codec = 'utf-32-le' if sys.byteorder == 'little' else 'utf-32-be'
         ancestral_sequence = "X" + fasta.fetch(reference=fasta.references[0])
-        ancestral_sequence = np.frombuffer(bytearray(ancestral_sequence,codec), dtype="U1")
+        ancestral_sequence = numpy.frombuffer(bytearray(ancestral_sequence,codec), dtype="U1")
         # From the human ancestral states README:
         # The convention for the sequence is:
         #    ACTG : high-confidence call, ancestral state supported by other 2 sequences
@@ -108,11 +113,56 @@ rule load_ancestral_fasta:
         #    N    : failure, the ancestral state is not supported by any other sequence
         #    -    : the extant species contains an insertion at this position
         #    .    : no coverage in the alignment
-        ds = sg.load_dataset(input[1])
+        ds_dir = input[1].replace(".vcf_done", "")
+        ds = sgkit.load_dataset(ds_dir)
         ancestral_states = ancestral_sequence[ds['variant_position'].values]
-        ancestral_states = xr.DataArray(data=ancestral_states, dims=["variants"], name="variant_ancestral_state")
+        ancestral_states = xarray.DataArray(data=ancestral_states, dims=["variants"], name="variant_ancestral_state")
         ds.update({"variant_ancestral_state": ancestral_states})
-        sg.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_ancestral_state"}), input[1], mode="a")
+        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_ancestral_state"}), ds_dir, mode="a")
+
+rule mask_sites:
+    input:
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_state"
+    output:
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask"),
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask"),
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask")
+    run:
+        from xarray import full_like
+        client = Client(config["scheduler_address"])
+        ds_dir = input[0].replace(".vcf_done", "")
+        ds = sgkit.load_dataset(ds_dir)
+        chunks = ds.variant_position.chunks
+
+        # Mask bad ancestral sites
+        wanted_variants = (ds['variant_ancestral_state'] != '-') & \
+                          (ds['variant_ancestral_state'] != '.') & \
+                          (ds['variant_ancestral_state'] != 'N')
+        wanted_variants = wanted_variants.rename("variant_bad_ancestral_mask").chunk(chunks).compute()
+        assert set(numpy.unique(ds['variant_ancestral_state'][wanted_variants])) == {'A', 'C', 'G', 'T', 'a', 'c', 'g', 't'}
+        ds.update({"variant_bad_ancestral_mask": wanted_variants})
+        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_bad_ancestral_mask"}),
+            ds_dir, mode="a")
+
+        # Mask duplicate sites with duplicate position
+        pos = ds['variant_position']
+        pos_shift_left = full_like(pos,-1)
+        pos_shift_left[0:-1] = pos[1:]
+        pos_shift_right = full_like(pos,-1)
+        pos_shift_right[1:] = pos[:-1]
+        wanted_variants = (pos != pos_shift_left) & (pos != pos_shift_right)
+        wanted_variants = wanted_variants.rename("variant_duplicate_position_mask").chunk(chunks).compute()
+        ds.update({"variant_duplicate_position_mask": wanted_variants})
+        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_duplicate_position_mask"}),
+         ds_dir, mode="a")
+
+        ## Create the combined mask
+        wanted_variants = ds['variant_duplicate_position_mask'] & ds['variant_bad_ancestral_mask']
+        wanted_variants = wanted_variants.rename("variant_mask").chunk(chunks).compute()
+        ds.update({"variant_mask": wanted_variants})
+        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_mask"}), ds_dir, mode="a")
+
 
 rule summary_table:
     input:
@@ -120,28 +170,52 @@ rule summary_table:
     output:
         data_dir/"vcf_summary_table.csv"
     run:
-        with open(output[0], "w") as f:
-           f.write("vcf_name, zarr_size, n_variants, n_samples, ac0, ac1, ac2, missing_count, tri_allele_and_above_count, full_nbytes, no_singletons_nbytes, half_no_singletons_nbytes\n")
-           for vcf_stats in input:
-              with open(vcf_stats, "r") as json_stats_f:
-                stats = json.load(json_stats_f)
-                ac1 = stats['allele_counts'][1]
-                n_sites = stats['n_variants']
-                n_samples = stats['n_samples']
-                n_ploidy = stats['n_ploidy']
-                f.write(f"{stats['name']}, ")
-                f.write(', '.join([str(number_to_SI(n)) for n in [
-                    stats['size'],
-                    n_sites,
-                    n_samples,
-                    stats['allele_counts'][0],
-                    ac1,
-                    stats['allele_counts'][2],
-                    stats['missing_count'],
-                    stats['tri_allele_and_above_count'],
-                    n_sites*n_samples*n_ploidy,
-                    (n_sites-ac1)*n_samples*n_ploidy,
-                    (n_sites-ac1)*n_samples*n_ploidy*0.5,
-                ]]))
-                f.write('\n')
+        import csv
+        def number_to_SI(number):
+            """Convert a number to a string with SI units, unless it is a string already."""
+            units = ["", "K", "M", "G", "T", "P", "E", "Z", "Y"]
+            unit = 0
+            if isinstance(number, str):
+                return number
+            while number > 1000:
+                number /= 1000
+                unit += 1
+            return f"{number:.2f}{units[unit]}"
 
+        header = ["vcf_name", "zarr_size", "n_variants", "n_samples", "ac==0", "ac==1",
+        "ac==2", "missing_genotypes", "num_sites_triallelic", "sites_bad_ancestral",
+        "sites_duplicate_pos", "sites_masked", "full_nbytes", "no_singletons_nbytes",
+        "no_singletons_bitpack_nbytes"]
+        with open(output[0], "w", newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=header)
+            writer.writeheader()
+
+            for vcf_stats in input:
+                with open(vcf_stats, "r") as json_stats_f:
+                    stats = json.load(json_stats_f)
+                    ac0 = sum([ac == 0 for ac in stats['allele_counts']])
+                    ac1 = sum([ac == 1 for ac in stats['allele_counts']])
+                    ac2 = sum([ac == 2 for ac in stats['allele_counts']])
+                    n_sites = stats['n_variants']
+                    n_samples = stats['n_samples']
+                    n_ploidy = stats['n_ploidy']
+                    n_masked = stats['sites_masked']
+                    row_dict = {
+                        "vcf_name": stats['name'],
+                        "zarr_size": stats['size'],
+                        "n_variants": n_sites,
+                        "n_samples": n_samples,
+                        "ac==0": ac0,
+                        "ac==1": ac1,
+                        "ac==2": ac2,
+                        "missing_genotypes": stats['missing_count'],
+                        "num_sites_triallelic": stats['num_sites_triallelic'],
+                        "sites_bad_ancestral": stats['sites_bad_ancestral'],
+                        "sites_duplicate_pos": stats['sites_duplicate_pos'],
+                        "sites_masked": n_masked,
+                        "full_nbytes": (n_sites-n_masked) * n_samples * n_ploidy,
+                        "no_singletons_nbytes": ((n_sites-n_masked) - ac1) * n_samples * n_ploidy,
+                        "no_singletons_bitpack_nbytes": ((n_sites-n_masked) - ac1) * n_samples * n_ploidy / 8
+                    }
+                    row_dict = {k: number_to_SI(v) for k, v in row_dict.items()}
+                    writer.writerow(row_dict)
