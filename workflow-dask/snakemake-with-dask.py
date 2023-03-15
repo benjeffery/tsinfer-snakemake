@@ -1,10 +1,14 @@
 import yaml
 import subprocess
 import sys
+import dask
 
 if __name__ == '__main__':
     with open("config.yaml") as f:
         config = yaml.safe_load(f)
+
+    for key, value in config["dask"].items():
+        dask.config.set({key: value})
 
     # Make a dask cluster from the module.class string specified in config
     cluster_class = config["cluster"]["class"]
