@@ -142,14 +142,11 @@ rule mask_sites:
         chunks = ds.variant_position.chunks
 
         # Mask bad ancestral sites
-        wanted_variants = (ds['variant_ancestral_state'] != '-') & \
-                          (ds['variant_ancestral_state'] != '.') & \
-                          (ds['variant_ancestral_state'] != 'N')
+        wanted_variants = (ds['variant_ancestral_state'] != '-') & (ds['variant_ancestral_state'] != '.') & (ds['variant_ancestral_state'] != 'N')
         wanted_variants = wanted_variants.rename("variant_bad_ancestral_mask").chunk(chunks).compute()
         assert set(numpy.unique(ds['variant_ancestral_state'][wanted_variants])) == {'A', 'C', 'G', 'T', 'a', 'c', 'g', 't'}
         ds.update({"variant_bad_ancestral_mask": wanted_variants})
-        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_bad_ancestral_mask"}),
-            ds_dir, mode="a")
+        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_bad_ancestral_mask"}), ds_dir, mode="a")
 
         # Mask duplicate sites with duplicate position
         pos = ds['variant_position']
@@ -160,8 +157,7 @@ rule mask_sites:
         wanted_variants = (pos != pos_shift_left) & (pos != pos_shift_right)
         wanted_variants = wanted_variants.rename("variant_duplicate_position_mask").chunk(chunks).compute()
         ds.update({"variant_duplicate_position_mask": wanted_variants})
-        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_duplicate_position_mask"}),
-         ds_dir, mode="a")
+        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_duplicate_position_mask"}), ds_dir, mode="a")
 
         ## Create the combined mask
         wanted_variants = ds['variant_duplicate_position_mask'] & ds['variant_bad_ancestral_mask']
