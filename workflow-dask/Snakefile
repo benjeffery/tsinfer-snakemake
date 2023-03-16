@@ -99,6 +99,10 @@ rule load_ancestral_fasta:
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done"
     output:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_state")
+    threads: 1
+    resources:
+        mem_mb=16000,
+        time_min=30
     run:
         import pysam
         fasta = pysam.FastaFile(input[0])
@@ -128,6 +132,8 @@ rule mask_sites:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask"),
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask"),
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask")
+    resources:
+        dask_cluster=1
     run:
         from xarray import full_like
         client = Client(config["scheduler_address"])
