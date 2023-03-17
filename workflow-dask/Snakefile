@@ -220,9 +220,8 @@ rule summary_table:
                         "sites_bad_ancestral": stats['sites_bad_ancestral'],
                         "sites_duplicate_pos": stats['sites_duplicate_pos'],
                         "sites_masked": n_masked,
-                        "full_nbytes": (n_sites-n_masked) * n_samples * n_ploidy,
-                        "no_singletons_nbytes": ((n_sites-n_masked) - ac1) * n_samples * n_ploidy,
-                        "no_singletons_bitpack_nbytes": ((n_sites-n_masked) - ac1) * n_samples * n_ploidy / 8
+                        "inference_nbytes": ((n_sites-n_masked) - ac1) * n_samples * n_ploidy,
+                        "inference_bitpack_nbytes": ((n_sites-n_masked) - ac1) * n_samples * n_ploidy / 8
                     }
                     row_dict = {k: number_to_SI(v) for k, v in row_dict.items()}
                     writer.writerow(row_dict)
