@@ -15,7 +15,8 @@ for k,v in config["dask"].items():
 
 data_dir=Path(config['data_dir'])
 
-localrules: all, summary_table, vcf_to_zarrs
+# These are quick steps that we don't want to submit jobs for
+localrules: all, summary_table
 
 rule all:
     input:
@@ -139,6 +140,7 @@ rule mask_sites:
         mem_mb=16000,
         time_min=30
     run:
+        #No need for a dask cluster here
         from xarray import full_like
         ds_dir = input[0].replace(".vcf_done", "")
         ds = sgkit.load_dataset(ds_dir)
