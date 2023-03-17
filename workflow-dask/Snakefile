@@ -29,7 +29,7 @@ rule vcf_to_zarrs:
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
         data_dir/"zarr_vcfs"/"{vcf_name}"/"performance_report.html"
     resources:
-        dask_cluster=1
+        dask_cluster=10,
         mem_mb=16000,
         time_min=239
     params:
@@ -67,7 +67,7 @@ rule zarr_stats:
     output:
         data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
     resources:
-        dask_cluster=1
+        dask_cluster=5,
         mem_mb=16000,
         time_min=30
     run:
