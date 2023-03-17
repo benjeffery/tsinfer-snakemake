@@ -20,7 +20,8 @@ localrules: all, summary_table
 
 rule all:
     input:
-        data_dir/"vcf_summary_table.csv"
+        data_dir/"vcf_summary_table.csv",
+        expand(data_dir/"ancestors"/"{vcf_name}"/"ancestors.zarr", vcf_name=config["vcfs"].keys())
 
 rule vcf_to_zarrs:
     input:
@@ -56,46 +57,6 @@ rule vcf_to_zarrs:
                 tempdir=config["temp_dir"]
             )
         Path(str(output[0])).touch()
-
-
-rule zarr_stats:
-    input:
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask"
-
-    output:
-        data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
-    resources:
-        dask_cluster=5,
-        mem_mb=16000,
-        time_min=30
-    run:
-        client = Client(config["scheduler_address"])
-        ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
-        out = {}
-        out['dataset_summary'] = str(ds)
-        out['name'] = ', '.join(ds.contigs)
-        out['n_samples'] = ds.dims['samples']
-        out['n_variants'] = ds.dims['variants']
-        out['n_ploidy'] = ds.dims['ploidy']
-        #Flatten the ploidy dimension as tsinfer sees each phased haplotype as a sample
-        gt = (ds.call_genotype.stack(haplotype=("samples","ploidy")))
-        out['allele_counts'] = (gt > 0).sum(dim=['haplotype']).to_numpy().tolist()
-        out['missing_count'] = int((gt == -1).sum())
-        out['num_sites_triallelic'] = int(((gt > 1).sum(dim=["haplotype"]) > 0).sum())
-        out['sites_bad_ancestral'] = int((~ds.variant_bad_ancestral_mask).sum())
-        out['sites_duplicate_pos'] = int((~ds.variant_duplicate_position_mask).sum())
-        out['sites_masked'] = int((~ds.variant_mask).sum())
-        total_size = 0
-        for dirpath, dirnames, filenames in os.walk(input[0].replace(".vcf_done", "")):
-            for f in filenames:
-                fp = os.path.join(dirpath, f)
-                total_size += os.path.getsize(fp)
-        out['size'] = total_size
-        with open(output[0], "w") as f:
-            f.write(json.dumps(out))
 
 rule load_ancestral_fasta:
     input:
@@ -170,8 +131,45 @@ rule mask_sites:
         ds.update({"variant_mask": wanted_variants})
         sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_mask"}), ds_dir, mode="a")
 
+rule zarr_stats:
+    input:
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask"
+    output:
+        data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
+    resources:
+        dask_cluster=5,
+        mem_mb=16000,
+        time_min=30
+    run:
+        client = Client(config["scheduler_address"])
+        ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
+        out = {}
+        out['dataset_summary'] = str(ds)
+        out['name'] = ', '.join(ds.contigs)
+        out['n_samples'] = ds.dims['samples']
+        out['n_variants'] = ds.dims['variants']
+        out['n_ploidy'] = ds.dims['ploidy']
+        #Flatten the ploidy dimension as tsinfer sees each phased haplotype as a sample
+        gt = (ds.call_genotype.stack(haplotype=("samples","ploidy")))
+        out['allele_counts'] = (gt > 0).sum(dim=['haplotype']).to_numpy().tolist()
+        out['missing_count'] = int((gt == -1).sum())
+        out['num_sites_triallelic'] = int(((gt > 1).sum(dim=["haplotype"]) > 0).sum())
+        out['sites_bad_ancestral'] = int((~ds.variant_bad_ancestral_mask).sum())
+        out['sites_duplicate_pos'] = int((~ds.variant_duplicate_position_mask).sum())
+        out['sites_masked'] = int((~ds.variant_mask).sum())
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(input[0].replace(".vcf_done", "")):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                total_size += os.path.getsize(fp)
+        out['size'] = total_size
+        with open(output[0], "w") as f:
+            f.write(json.dumps(out))
 
-rule summary_table:
+checkpoint summary_table:
     input:
         expand(data_dir/"zarr_stats"/"{vcf_name}"/"stats.json", vcf_name=config["vcfs"].keys())
     output:
@@ -221,7 +219,49 @@ rule summary_table:
                         "sites_duplicate_pos": stats['sites_duplicate_pos'],
                         "sites_masked": n_masked,
                         "inference_nbytes": ((n_sites-n_masked) - ac1) * n_samples * n_ploidy,
-                        "inference_bitpack_nbytes": ((n_sites-n_masked) - ac1) * n_samples * n_ploidy / 8
+                        "inference_bitpack_nbytes": (((n_sites-n_masked) - ac1) * n_samples * n_ploidy) / 8
                     }
                     row_dict = {k: number_to_SI(v) for k, v in row_dict.items()}
                     writer.writerow(row_dict)
+
+def get_ancestor_gen_memory(wildcards):
+    #Use the checkpoint to check the stats file exists
+    checkpoint_output = checkpoints.summary_table.get()
+    vcf_stats = data_dir/"zarr_stats"/wildcards.vcf_name/"stats.json"
+    with open(vcf_stats, "r") as json_stats_f:
+        stats = json.load(json_stats_f)
+        n_samples = stats['n_samples']
+        n_ploidy = stats['n_ploidy']
+        n_sites = stats['n_variants']
+        n_masked = stats['sites_masked']
+        ac1 = sum([ac == 1 for ac in stats['allele_counts']])
+        return int(5_000 + (((n_sites-n_masked) - ac1) * n_samples * n_ploidy) / (8 * 1_048_576))
+
+def get_ancestor_cpus(wildcards):
+    import math
+    #Use the checkpoint to check the stats file exists
+    checkpoint_output = checkpoints.summary_table.get()
+    #For the GEL cluster, at least, we must ask for more CPUs to get more memory
+    return max(4, math.ceil(get_ancestor_gen_memory(wildcards) / 16_000))
+
+rule generate_ancestors:
+    input:
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_state",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask",
+        data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
+    output:
+        data_dir/"ancestors"/"{vcf_name}"/"ancestors.zarr"
+    threads: get_ancestor_cpus
+    resources:
+        mem_mb=get_ancestor_gen_memory,
+        time_min=24 * 60
+    run:
+        import tsinfer
+        import logging
+        logging.basicConfig(level=logging.INFO)
+        sample_data = tsinfer.SgkitSampleData(input[0].replace(".vcf_done", ""))
+        #Limit the threads as it too many leads to contention
+        tsinfer.generate_ancestors(sample_data, path=output[0], genotype_encoding=1, num_threads=max(threads, 8))
