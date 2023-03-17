@@ -15,8 +15,7 @@ for k,v in config["dask"].items():
 
 data_dir=Path(config['data_dir'])
 
-# Make dask tasks local
-localrules: all, summary_table, vcf_to_zarrs, zarr_stats
+localrules: all, summary_table, vcf_to_zarrs
 
 rule all:
     input:
@@ -31,6 +30,8 @@ rule vcf_to_zarrs:
         data_dir/"zarr_vcfs"/"{vcf_name}"/"performance_report.html"
     resources:
         dask_cluster=1
+        mem_mb=16000,
+        time_min=239
     params:
         target_part_size="5M",
         read_chunk_length=10_000,
@@ -67,6 +68,8 @@ rule zarr_stats:
         data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
     resources:
         dask_cluster=1
+        mem_mb=16000,
+        time_min=30
     run:
         client = Client(config["scheduler_address"])
         ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
