@@ -189,10 +189,9 @@ rule summary_table:
                 unit += 1
             return f"{number:.2f}{units[unit]}"
 
-        header = ["vcf_name", "zarr_size", "n_variants", "n_samples", "ac==0", "ac==1",
+        header = ["vcf_name", "vcf_size", "zarr_size", "n_variants", "n_samples", "ac==0", "ac==1",
         "ac==2", "missing_genotypes", "num_sites_triallelic", "sites_bad_ancestral",
-        "sites_duplicate_pos", "sites_masked", "full_nbytes", "no_singletons_nbytes",
-        "no_singletons_bitpack_nbytes"]
+        "sites_duplicate_pos", "sites_masked", "inference_nbytes", "inference_bitpack_nbytes"]
         with open(output[0], "w", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=header)
             writer.writeheader()
@@ -209,6 +208,7 @@ rule summary_table:
                     n_masked = stats['sites_masked']
                     row_dict = {
                         "vcf_name": stats['name'],
+                        "vcf_size": os.path.getsize(config["vcfs"][stats['name']]['vcf']),
                         "zarr_size": stats['size'],
                         "n_variants": n_sites,
                         "n_samples": n_samples,
