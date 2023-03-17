@@ -16,7 +16,7 @@ for k,v in config["dask"].items():
 data_dir=Path(config['data_dir'])
 
 # Make dask tasks local
-localrules: all, summary_table, vcf_to_zarrs, zarr_stats, mask_sites
+localrules: all, summary_table, vcf_to_zarrs, zarr_stats
 
 rule all:
     input:
@@ -133,10 +133,10 @@ rule mask_sites:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask"),
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask")
     resources:
-        dask_cluster=1
+        mem_mb=16000,
+        time_min=30
     run:
         from xarray import full_like
-        client = Client(config["scheduler_address"])
         ds_dir = input[0].replace(".vcf_done", "")
         ds = sgkit.load_dataset(ds_dir)
         chunks = ds.variant_position.chunks
