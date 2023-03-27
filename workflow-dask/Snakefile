@@ -263,5 +263,6 @@ rule generate_ancestors:
         import logging
         logging.basicConfig(level=logging.INFO)
         sample_data = tsinfer.SgkitSampleData(input[0].replace(".vcf_done", ""))
-        #Limit the threads as it too many leads to contention
-        tsinfer.generate_ancestors(sample_data, path=output[0], genotype_encoding=1, num_threads=max(threads, 8))
+        #Limit the threads to 8 as it too many leads to contention
+        with open(data_dir/"progress"/"generate_ancestors"/"{wildcards.vcf_name}.log", "w") as log_f:
+             tsinfer.generate_ancestors(sample_data, path=output[0], genotype_encoding=1, num_threads=max(threads, 8), progress=tsinfer.progress.ProgressMonitor(file=f, mininterval=30))
