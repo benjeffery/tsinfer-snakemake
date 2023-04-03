@@ -16,12 +16,17 @@ for k,v in config["dask"].items():
 data_dir=Path(config['data_dir'])
 
 # These are quick steps that we don't want to submit jobs for
-localrules: all, summary_table
+localrules: all, all_subset, summary_table
 
 rule all:
     input:
         data_dir/"vcf_summary_table.csv",
         expand(data_dir/"ancestors"/"{vcf_name}"/"ancestors.zarr", vcf_name=config["vcfs"].keys())
+
+rule all_subset:
+    input:
+        data_dir/"vcf_summary_table.csv",
+        expand(data_dir/"ancestors"/"{vcf_name}--subset-{subset}"/"ancestors.zarr", subset=config["subset"], vcf_name=config["vcfs"].keys())
 
 rule vcf_to_zarrs:
     input:
@@ -33,7 +38,8 @@ rule vcf_to_zarrs:
     resources:
         dask_cluster=10,
         mem_mb=16000,
-        time_min=239
+        time_min=239,
+        runtime=239
     params:
         target_part_size="5M",
         read_chunk_length=10_000,
@@ -58,16 +64,36 @@ rule vcf_to_zarrs:
             )
         Path(str(output[0])).touch()
 
+rule subset_zarr_vcf:
+    input:
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done"
+    output:
+        data_dir/"zarr_vcfs"/"{vcf_name}--subset-{subset_size}"/"data.zarr"/".vcf_done"
+    resources:
+        dask_cluster=5,
+        mem_mb=16000,
+        time_min=239,
+        runtime=239
+    run:
+        client = Client(config["scheduler_address"])
+        ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
+        wanted_samples = numpy.zeros((ds.sizes['samples'],),dtype=bool)
+        wanted_samples[:int(wildcards.subset_size)] = True
+        ds = ds.sel(samples=wanted_samples)
+        sgkit.save_dataset(ds,output[0].replace(".vcf_done", ""))
+        Path(str(output[0])).touch()
+
 rule load_ancestral_fasta:
     input:
-        lambda wildcards: config["vcfs"][wildcards.vcf_name]['ancestral_fasta'],
+        lambda wildcards: config["vcfs"][wildcards.vcf_name.split("--")[0]]['ancestral_fasta'],
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done"
     output:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_state")
     threads: 1
     resources:
         mem_mb=16000,
-        time_min=30
+        time_min=30,
+        runtime=30
     run:
         import pysam
         fasta = pysam.FastaFile(input[0])
@@ -99,7 +125,8 @@ rule mask_sites:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask")
     resources:
         mem_mb=16000,
-        time_min=30
+        time_min=30,
+        runtime=30
     run:
         #No need for a dask cluster here
         from xarray import full_like
@@ -142,7 +169,8 @@ rule zarr_stats:
     resources:
         dask_cluster=5,
         mem_mb=16000,
-        time_min=30
+        time_min=30,
+        runtime=30
     run:
         client = Client(config["scheduler_address"])
         ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
@@ -257,12 +285,14 @@ rule generate_ancestors:
     threads: get_ancestor_cpus
     resources:
         mem_mb=get_ancestor_gen_memory,
-        time_min=24 * 60
+        time_min=24 * 60,
+        runtime=24 * 60
     run:
         import tsinfer
         import logging
         logging.basicConfig(level=logging.INFO)
         sample_data = tsinfer.SgkitSampleData(input[0].replace(".vcf_done", ""))
         #Limit the threads to 8 as it too many leads to contention
+        os.makedirs(data_dir/"progress"/"generate_ancestors", exist_ok=True)
         with open(data_dir/"progress"/"generate_ancestors"/"{wildcards.vcf_name}.log", "w") as log_f:
-             tsinfer.generate_ancestors(sample_data, path=output[0], genotype_encoding=1, num_threads=max(threads, 8), progress=tsinfer.progress.ProgressMonitor(file=f, mininterval=30))
+             tsinfer.generate_ancestors(sample_data, path=output[0], genotype_encoding=1, num_threads=max(threads, 8), progress_monitor=tsinfer.progress.ProgressMonitor(file=log_f, mininterval=30))

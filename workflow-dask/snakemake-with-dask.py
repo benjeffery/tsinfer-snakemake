@@ -26,8 +26,8 @@ if __name__ == '__main__':
     # we need to run it in a subprocess, then when that is done shutdown the dask cluster
 
     subprocess.run(
-        ["snakemake", "--config", f"scheduler_address={cluster.scheduler_address}"]
-        + sys.argv[1:],
+        ["snakemake",] + sys.argv[1:] + [ "--config", f"scheduler_address={cluster.scheduler_address}"],
+
         check=True,
     )
     print(f"Shutting down cluster. {len(cluster.workers)} workers live.")
