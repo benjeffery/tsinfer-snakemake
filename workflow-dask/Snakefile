@@ -265,7 +265,8 @@ rule subset_zarr_vcf:
             sample_ids = numpy.genfromtxt(f,dtype=str)
         mask = numpy.isin(ds.sample_id.values, sample_ids)
         ds = ds.sel(samples=mask)
-        sgkit.save_dataset(ds,output[0].replace(".vcf_done", ""))
+        ds = ds.unify_chunks()
+        sgkit.save_dataset(ds,output[0].replace(".vcf_done", ""), auto_rechunk=True)
         Path(str(output[0])).touch()
 
 def get_ancestor_gen_memory(wildcards):
@@ -281,7 +282,10 @@ def get_ancestor_gen_memory(wildcards):
         n_sites = stats['n_variants']
         n_masked = stats['sites_masked']
         ac1 = sum([ac == 1 for ac in stats['allele_counts']])
-        return int(5_000 + (((n_sites-n_masked) - ac1) * n_samples * n_ploidy) / (8 * 1_048_576))
+        print(f"Sites: {n_sites}, Masked: {n_masked}, AC1: {ac1}, Samples: {n_samples}, Ploidy: {n_ploidy}")
+        mem = int(5_000 + (((n_sites-n_masked) - ac1) * n_samples * n_ploidy) / (8 * 1_048_576))
+        print(f"Memory: {mem}MB")
+        return mem
 
 def get_ancestor_cpus(wildcards):
     import math
@@ -317,9 +321,26 @@ rule generate_ancestors:
                  progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30})
              )
 
+rule truncate_ancestors:
+    input:
+        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors.zarr"
+    output:
+        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors-truncated.zarr"
+    threads: 1
+    resources:
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60
+    run:
+        import tsinfer
+        import logging
+        logging.basicConfig(level=logging.INFO)
+        ancestors = tsinfer.AncestorData.load(input[0])
+        truncated = ancestors.truncate_ancestors(0.4, 0.6, length_multiplier=1, path=output[0])
+
 rule match_ancestors:
     input:
-        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors.zarr",
+        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors-truncated.zarr",
         data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr",
         lambda wildcards: config["vcfs"][wildcards.vcf_name.split("--")[0]]['recomb_map'],
     output:
