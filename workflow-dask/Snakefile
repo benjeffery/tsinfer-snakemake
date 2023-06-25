@@ -197,6 +197,7 @@ checkpoint summary_table:
         data_dir/"vcf_summary_table.csv"
     run:
         import csv
+        import json
         def number_to_SI(number):
             """Convert a number to a string with SI units, unless it is a string already."""
             units = ["", "K", "M", "G", "T", "P", "E", "Z", "Y"]
