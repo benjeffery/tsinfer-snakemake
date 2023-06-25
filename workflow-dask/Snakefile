@@ -1,7 +1,3 @@
-import sgkit
-import numpy
-import xarray
-import sgkit.io.vcf
 import os.path
 import dask
 from pathlib import Path
@@ -16,17 +12,16 @@ for k,v in config["dask"].items():
 data_dir=Path(config['data_dir'])
 
 # These are quick steps that we don't want to submit jobs for
-localrules: all, all_subset, summary_table
+localrules: all, summary_table
 
 rule all:
     input:
         data_dir/"vcf_summary_table.csv",
-        expand(data_dir/"ancestors"/"{vcf_name}"/"ancestors.zarr", vcf_name=config["vcfs"].keys())
+        expand(data_dir/"ancestors"/"{vcf_name}-subset-{subset}"/"out.trees",
+            vcf_name=config["vcfs"].keys(),
+            subset=[config['sample_ids_file'].replace("/", "--")]
+        )
 
-rule all_subset:
-    input:
-        data_dir/"vcf_summary_table.csv",
-        expand(data_dir/"ancestors"/"{vcf_name}--subset-{subset}"/"ancestors.zarr", subset=config["subset"], vcf_name=config["vcfs"].keys())
 
 rule vcf_to_zarrs:
     input:
@@ -48,6 +43,7 @@ rule vcf_to_zarrs:
         chunk_width=3_000,
         retain_temp_files=True
     run:
+        import sgkit.io.vcf
         client = Client(config["scheduler_address"])
         with performance_report(
             filename=output[1]
@@ -64,31 +60,12 @@ rule vcf_to_zarrs:
             )
         Path(str(output[0])).touch()
 
-rule subset_zarr_vcf:
-    input:
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done"
-    output:
-        data_dir/"zarr_vcfs"/"{vcf_name}--subset-{subset_size}"/"data.zarr"/".vcf_done"
-    resources:
-        dask_cluster=5,
-        mem_mb=16000,
-        time_min=239,
-        runtime=239
-    run:
-        client = Client(config["scheduler_address"])
-        ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
-        wanted_samples = numpy.zeros((ds.sizes['samples'],),dtype=bool)
-        wanted_samples[:int(wildcards.subset_size)] = True
-        ds = ds.sel(samples=wanted_samples)
-        sgkit.save_dataset(ds,output[0].replace(".vcf_done", ""))
-        Path(str(output[0])).touch()
-
 rule load_ancestral_fasta:
     input:
         lambda wildcards: config["vcfs"][wildcards.vcf_name.split("--")[0]]['ancestral_fasta'],
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done"
     output:
-        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_state")
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_allele")
     threads: 1
     resources:
         mem_mb=16000,
@@ -96,6 +73,9 @@ rule load_ancestral_fasta:
         runtime=30
     run:
         import pysam
+        import numpy
+        import sgkit
+        import xarray
         fasta = pysam.FastaFile(input[0])
         # NB! We put in an extra character at the start to convert to 1 based coords.
         codec = 'utf-32-le' if sys.byteorder == 'little' else 'utf-32-be'
@@ -110,15 +90,15 @@ rule load_ancestral_fasta:
         #    .    : no coverage in the alignment
         ds_dir = input[1].replace(".vcf_done", "")
         ds = sgkit.load_dataset(ds_dir)
-        ancestral_states = ancestral_sequence[ds['variant_position'].values]
-        ancestral_states = xarray.DataArray(data=ancestral_states, dims=["variants"], name="variant_ancestral_state")
-        ds.update({"variant_ancestral_state": ancestral_states})
-        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_ancestral_state"}), ds_dir, mode="a")
+        ancestral_states = numpy.char.upper(ancestral_sequence[ds['variant_position'].values])
+        ancestral_states = xarray.DataArray(data=ancestral_states, dims=["variants"], name="variant_ancestral_allele")
+        ds.update({"variant_ancestral_allele": ancestral_states})
+        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_ancestral_allele"}), ds_dir, mode="a")
 
 rule mask_sites:
     input:
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_state"
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_allele"
     output:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask"),
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask"),
@@ -130,16 +110,26 @@ rule mask_sites:
     run:
         #No need for a dask cluster here
         from xarray import full_like
+        import sgkit
+        import numpy
+        import sgkit
         ds_dir = input[0].replace(".vcf_done", "")
         ds = sgkit.load_dataset(ds_dir)
         chunks = ds.variant_position.chunks
 
         # Mask bad ancestral sites
-        wanted_variants = (ds['variant_ancestral_state'] != '-') & (ds['variant_ancestral_state'] != '.') & (ds['variant_ancestral_state'] != 'N')
+        wanted_variants = (ds['variant_ancestral_allele'] != '-') & (ds['variant_ancestral_allele'] != '.') & (ds['variant_ancestral_allele'] != 'N')
         wanted_variants = wanted_variants.rename("variant_bad_ancestral_mask").chunk(chunks).compute()
-        assert set(numpy.unique(ds['variant_ancestral_state'][wanted_variants])) == {'A', 'C', 'G', 'T', 'a', 'c', 'g', 't'}
+        assert set(numpy.unique(ds['variant_ancestral_allele'][wanted_variants])) == {'A', 'C', 'G', 'T'}
         ds.update({"variant_bad_ancestral_mask": wanted_variants})
         sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_bad_ancestral_mask"}), ds_dir, mode="a")
+
+        # Mask sites where the ancestral state is not an allele
+        wanted_variants = ((ds['variant_ancestral_allele'] == ds['variant_allele'][:,0]) |
+                           (ds['variant_ancestral_allele'] == ds['variant_allele'][:,1]))
+        wanted_variants = wanted_variants.rename("variant_no_ancestral_allele").chunk(chunks).compute()
+        ds.update({"variant_no_ancestral_allele": wanted_variants})
+        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_no_ancestral_allele"}), ds_dir, mode="a")
 
         # Mask duplicate sites with duplicate position
         pos = ds['variant_position']
@@ -153,7 +143,7 @@ rule mask_sites:
         sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_duplicate_position_mask"}), ds_dir, mode="a")
 
         ## Create the combined mask
-        wanted_variants = ds['variant_duplicate_position_mask'] & ds['variant_bad_ancestral_mask']
+        wanted_variants = ds['variant_duplicate_position_mask'] & ds['variant_bad_ancestral_mask'] & ds['variant_no_ancestral_allele']
         wanted_variants = wanted_variants.rename("variant_mask").chunk(chunks).compute()
         ds.update({"variant_mask": wanted_variants})
         sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_mask"}), ds_dir, mode="a")
@@ -172,11 +162,13 @@ rule zarr_stats:
         time_min=30,
         runtime=30
     run:
+        import sgkit
+        import json
         client = Client(config["scheduler_address"])
         ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
         out = {}
         out['dataset_summary'] = str(ds)
-        out['name'] = ', '.join(ds.contigs)
+        out['name'] = ', '.join(ds.attrs['contigs'])
         out['n_samples'] = ds.dims['samples']
         out['n_variants'] = ds.dims['variants']
         out['n_ploidy'] = ds.dims['ploidy']
@@ -186,6 +178,7 @@ rule zarr_stats:
         out['missing_count'] = int((gt == -1).sum())
         out['num_sites_triallelic'] = int(((gt > 1).sum(dim=["haplotype"]) > 0).sum())
         out['sites_bad_ancestral'] = int((~ds.variant_bad_ancestral_mask).sum())
+        out['sites_no_ancestral'] = int((~ds.variant_no_ancestral_allele).sum())
         out['sites_duplicate_pos'] = int((~ds.variant_duplicate_position_mask).sum())
         out['sites_masked'] = int((~ds.variant_mask).sum())
         total_size = 0
@@ -216,7 +209,7 @@ checkpoint summary_table:
             return f"{number:.2f}{units[unit]}"
 
         header = ["vcf_name", "vcf_size", "zarr_size", "n_variants", "n_samples", "ac==0", "ac==1",
-        "ac==2", "missing_genotypes", "num_sites_triallelic", "sites_bad_ancestral",
+        "ac==2", "missing_genotypes", "num_sites_triallelic", "sites_bad_ancestral", "sites_no_ancestral",
         "sites_duplicate_pos", "sites_masked", "inference_nbytes", "inference_bitpack_nbytes"]
         with open(output[0], "w", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=header)
@@ -244,6 +237,7 @@ checkpoint summary_table:
                         "missing_genotypes": stats['missing_count'],
                         "num_sites_triallelic": stats['num_sites_triallelic'],
                         "sites_bad_ancestral": stats['sites_bad_ancestral'],
+                        "sites_no_ancestral": stats['sites_no_ancestral'],
                         "sites_duplicate_pos": stats['sites_duplicate_pos'],
                         "sites_masked": n_masked,
                         "inference_nbytes": ((n_sites-n_masked) - ac1) * n_samples * n_ploidy,
@@ -252,13 +246,36 @@ checkpoint summary_table:
                     row_dict = {k: number_to_SI(v) for k, v in row_dict.items()}
                     writer.writerow(row_dict)
 
+rule subset_zarr_vcf:
+    input:
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done"
+    output:
+        directory(data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr")
+    resources:
+        dask_cluster=5,
+        mem_mb=16000,
+        time_min=239,
+        runtime=239
+    run:
+        import numpy
+        import sgkit
+        client = Client(config["scheduler_address"])
+        ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
+        with open(wildcards.sample_ids_file.replace("--", "/"),'r') as f:
+            sample_ids = numpy.genfromtxt(f,dtype=str)
+        mask = numpy.isin(ds.sample_id.values, sample_ids)
+        ds = ds.sel(samples=mask)
+        sgkit.save_dataset(ds,output[0].replace(".vcf_done", ""))
+        Path(str(output[0])).touch()
+
 def get_ancestor_gen_memory(wildcards):
     #Use the checkpoint to check the stats file exists
     checkpoint_output = checkpoints.summary_table.get()
     vcf_stats = data_dir/"zarr_stats"/wildcards.vcf_name/"stats.json"
     with open(vcf_stats, "r") as json_stats_f:
+        with open(wildcards.sample_ids_file.replace("--", "/"),'r') as f:
+            n_samples = len(numpy.genfromtxt(f,dtype=str))
         stats = json.load(json_stats_f)
-        n_samples = stats['n_samples']
         n_ploidy = stats['n_ploidy']
         n_sites = stats['n_variants']
         n_masked = stats['sites_masked']
@@ -274,14 +291,10 @@ def get_ancestor_cpus(wildcards):
 
 rule generate_ancestors:
     input:
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_state",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask",
+        data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr",
         data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
     output:
-        data_dir/"ancestors"/"{vcf_name}"/"ancestors.zarr"
+        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors.zarr"
     threads: get_ancestor_cpus
     resources:
         mem_mb=get_ancestor_gen_memory,
@@ -294,5 +307,104 @@ rule generate_ancestors:
         sample_data = tsinfer.SgkitSampleData(input[0].replace(".vcf_done", ""))
         #Limit the threads to 8 as it too many leads to contention
         os.makedirs(data_dir/"progress"/"generate_ancestors", exist_ok=True)
-        with open(data_dir/"progress"/"generate_ancestors"/"{wildcards.vcf_name}.log", "w") as log_f:
-             tsinfer.generate_ancestors(sample_data, path=output[0], genotype_encoding=1, num_threads=max(threads, 8), progress_monitor=tsinfer.progress.ProgressMonitor(file=log_f, mininterval=30))
+        with open(data_dir/"progress"/"generate_ancestors"/f"{wildcards.vcf_name}.log", "w") as log_f:
+             tsinfer.generate_ancestors(
+                 sample_data,
+                 path=output[0],
+                 genotype_encoding=1,
+                 num_threads=max(threads,8),
+                 progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30})
+             )
+
+rule match_ancestors:
+    input:
+        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors.zarr",
+        data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr",
+        lambda wildcards: config["vcfs"][wildcards.vcf_name.split("--")[0]]['recomb_map'],
+    output:
+        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors.trees",
+        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"performance_report.html"
+    #Minimal threads as we're using dask
+    threads: 2
+    resources:
+        time_min=6 * 30 * 24 * 60, #6 months
+        runtime=6 * 30 * 24 * 60
+    run:
+        import tsinfer
+        import logging
+        import msprime
+        import numpy
+        import os
+        logging.basicConfig(level=logging.INFO)
+        ancestors = tsinfer.AncestorData.load(input[0])
+        sample_data = tsinfer.SgkitSampleData(input[1].replace(".vcf_done", ""))
+        inference_pos = ancestors.sites_position[:]
+        rate_map = msprime.RateMap.read_hapmap(
+            input[-1]
+        )
+        genetic_dists = tsinfer.Matcher.recombination_rate_to_dist(
+            rate_map, inference_pos
+        )
+        recombination_map = tsinfer.Matcher.recombination_dist_to_prob(genetic_dists)
+        #Set 0 probabilities to a small value
+        recombination_map[recombination_map == 0] = 1e-19
+        mismatch_ratio = 1
+        num_alleles = 2
+        mismatch_map = numpy.full(
+            len(inference_pos),
+            tsinfer.Matcher.mismatch_ratio_to_prob(
+                mismatch_ratio,
+                numpy.median(genetic_dists),
+                num_alleles
+            )
+        )
+        os.makedirs(data_dir/"progress"/"match_ancestors", exist_ok=True)
+        client = Client(config["scheduler_address"])
+        with open(data_dir/"progress"/"match_ancestors"/f"{wildcards.vcf_name}.log", "w") as log_f:
+            with performance_report(
+                    filename=output[1]
+            ):
+                ts = tsinfer.match_ancestors(
+                    sample_data,
+                    ancestors,
+                    recombination=recombination_map,
+                    mismatch=mismatch_map,
+                    precision=15,
+                    resume_lmdb_file=data_dir/"resume"/"match_ancestors"/f"{wildcards.vcf_name}.lmdb",
+                    path_compression=True,
+                    dask=True,
+                    num_threads=threads,
+                    progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30})
+                )
+        ts.dump(output[0])
+
+rule match_samples:
+    input:
+        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors.zarr",
+        data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr",
+    output:
+        data_dir / "ancestors" / "{vcf_name}-subset-{sample_ids_file}" / "out.trees"
+
+    threads: 24
+    resources:
+        time_min=6 * 30 * 24 * 60, #6 months
+        runtime=6 * 30 * 24 * 60
+    run:
+        import tsinfer
+        import logging
+        logging.basicConfig(level=logging.INFO)
+
+        ancestors = tsinfer.AncestorData.load(input[0])
+        sample_data = tsinfer.SgkitSampleData(input[1].replace(".vcf_done", ""))
+
+        inference_pos = ancestors.sites_position[:]
+
+        os.makedirs(data_dir/"progress"/"match_ancestors", exist_ok=True)
+        with open(data_dir/"progress"/"match_ancestors"/f"{wildcards.vcf_name}.log", "w") as log_f:
+            ts = tsinfer.match_ancestors(
+                sample_data,
+                ancestors,
+                num_threads=threads,
+                progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30})
+            )
+        ts.dump(output[0])
