@@ -39,7 +39,7 @@ rule vcf_to_zarrs:
         target_part_size="5M",
         read_chunk_length=10_000,
         temp_chunk_length=20_000,
-        chunk_length=30_000,
+        chunk_length=40_000,
         chunk_width=1_500,
         retain_temp_files=True
     run:
