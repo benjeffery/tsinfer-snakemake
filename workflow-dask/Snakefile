@@ -102,7 +102,8 @@ rule mask_sites:
     output:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask"),
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask"),
-        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask")
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask"),
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_no_ancestral_allele")
     resources:
         mem_mb=16000,
         time_min=30,
@@ -153,7 +154,8 @@ rule zarr_stats:
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask",
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask"
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_no_ancestral_allele"
     output:
         data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
     resources:
@@ -249,7 +251,13 @@ checkpoint summary_table:
 
 rule subset_zarr_vcf:
     input:
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done"
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/".vcf_done",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_ancestral_allele",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask",
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_no_ancestral_allele"
+
     output:
         directory(data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr")
     resources:
