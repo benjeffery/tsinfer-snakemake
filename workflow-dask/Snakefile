@@ -351,7 +351,6 @@ rule match_ancestors:
     input:
         data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors-truncated.zarr",
         data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr",
-        lambda wildcards: config["vcfs"][wildcards.vcf_name.split("--")[0]]['recomb_map'],
     output:
         data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors.trees",
         data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"performance_report.html"
@@ -369,26 +368,6 @@ rule match_ancestors:
         logging.basicConfig(level=logging.INFO)
         ancestors = tsinfer.AncestorData.load(input[0])
         sample_data = tsinfer.SgkitSampleData(input[1])
-        inference_pos = ancestors.sites_position[:]
-        rate_map = msprime.RateMap.read_hapmap(
-            input[-1]
-        )
-        genetic_dists = tsinfer.Matcher.recombination_rate_to_dist(
-            rate_map, inference_pos
-        )
-        recombination_map = tsinfer.Matcher.recombination_dist_to_prob(genetic_dists)
-        #Set 0 probabilities to a small value
-        recombination_map[recombination_map == 0] = 1e-19
-        mismatch_ratio = 1
-        num_alleles = 2
-        mismatch_map = numpy.full(
-            len(inference_pos),
-            tsinfer.Matcher.mismatch_ratio_to_prob(
-                mismatch_ratio,
-                numpy.median(genetic_dists),
-                num_alleles
-            )
-        )
         os.makedirs(data_dir/"progress"/"match_ancestors", exist_ok=True)
         os.makedirs(data_dir / "resume" / "match_ancestors", exist_ok=True)
         client = Client(config["scheduler_address"])
@@ -401,8 +380,6 @@ rule match_ancestors:
                     ancestors,
                     path_compression=True,
                     num_threads=threads,
-                    recombination=recombination_map,
-                    mismatch=mismatch_map,
                     precision=15,
                     progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30}),
                     resume_lmdb_file=str(data_dir/"resume"/"match_ancestors"/f"{wildcards.vcf_name}-{wildcards.sample_ids_file}.lmdb"),
