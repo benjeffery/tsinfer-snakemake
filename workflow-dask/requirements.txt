@@ -1,0 +1,10 @@
+git+https://github.com/benjeffery/tsinfer.git@dask-experiments
+sgkit
+aiohttp
+cyvcf2
+requests
+yarl
+msprime
+pysam
+dask
+snakemake
