@@ -56,7 +56,8 @@ rule vcf_to_zarrs:
                 temp_chunk_length=params.temp_chunk_length,
                 chunk_length=params.chunk_length,
                 chunk_width=params.chunk_width,
-                tempdir=config["temp_dir"]
+                tempdir=config["temp_dir"],
+                retain_temp_files=params.retain_temp_files
             )
         Path(str(output[0])).touch()
 

@@ -8,3 +8,4 @@ msprime
 pysam
 dask
 snakemake
+bokeh
