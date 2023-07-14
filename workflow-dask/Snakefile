@@ -104,7 +104,7 @@ rule mask_sites:
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask"),
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask"),
         directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask"),
-        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_no_ancestral_allele")
+        directory(data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_no_ancestral_allele_mask")
     resources:
         mem_mb=16000,
         time_min=30,
@@ -129,9 +129,9 @@ rule mask_sites:
         # Mask sites where the ancestral state is not an allele
         wanted_variants = ((ds['variant_ancestral_allele'] == ds['variant_allele'][:,0]) |
                            (ds['variant_ancestral_allele'] == ds['variant_allele'][:,1]))
-        wanted_variants = wanted_variants.rename("variant_no_ancestral_allele").chunk(chunks).compute()
-        ds.update({"variant_no_ancestral_allele": wanted_variants})
-        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_no_ancestral_allele"}), ds_dir, mode="a")
+        wanted_variants = wanted_variants.rename("variant_no_ancestral_allele_mask").chunk(chunks).compute()
+        ds.update({"variant_no_ancestral_allele_mask": wanted_variants})
+        sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_no_ancestral_allele_mask"}), ds_dir, mode="a")
 
         # Mask duplicate sites with duplicate position
         pos = ds['variant_position']
@@ -144,8 +144,8 @@ rule mask_sites:
         ds.update({"variant_duplicate_position_mask": wanted_variants})
         sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_duplicate_position_mask"}), ds_dir, mode="a")
 
-        ## Create the combined mask
-        wanted_variants = ds['variant_duplicate_position_mask'] & ds['variant_bad_ancestral_mask'] & ds['variant_no_ancestral_allele']
+        ## Create the combined mask - tsinfer now copes with missing and bad ancestral sites so don't use those masks
+        wanted_variants = ds['variant_duplicate_position_mask']
         wanted_variants = wanted_variants.rename("variant_mask").chunk(chunks).compute()
         ds.update({"variant_mask": wanted_variants})
         sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_mask"}), ds_dir, mode="a")
@@ -156,7 +156,7 @@ rule zarr_stats:
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask",
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask",
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_no_ancestral_allele"
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_no_ancestral_allele_mask"
     output:
         data_dir/"zarr_stats"/"{vcf_name}"/"stats.json"
     resources:
@@ -181,7 +181,7 @@ rule zarr_stats:
         out['missing_count'] = int((gt == -1).sum())
         out['num_sites_triallelic'] = int(((gt > 1).sum(dim=["haplotype"]) > 0).sum())
         out['sites_bad_ancestral'] = int((~ds.variant_bad_ancestral_mask).sum())
-        out['sites_no_ancestral'] = int((~ds.variant_no_ancestral_allele).sum())
+        out['sites_no_ancestral'] = int((~ds.variant_no_ancestral_allele_mask).sum())
         out['sites_duplicate_pos'] = int((~ds.variant_duplicate_position_mask).sum())
         out['sites_masked'] = int((~ds.variant_mask).sum())
         total_size = 0
@@ -257,7 +257,7 @@ rule subset_zarr_vcf:
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_mask",
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_duplicate_position_mask",
         data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_bad_ancestral_mask",
-        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_no_ancestral_allele"
+        data_dir/"zarr_vcfs"/"{vcf_name}"/"data.zarr"/"variant_no_ancestral_allele_mask"
 
     output:
         directory(data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr")
