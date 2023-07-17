@@ -9,3 +9,4 @@ pysam
 dask
 snakemake
 bokeh
+pyfaidx

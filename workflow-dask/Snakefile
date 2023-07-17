@@ -73,15 +73,14 @@ rule load_ancestral_fasta:
         time_min=30,
         runtime=30
     run:
-        import pysam
+        import pyfaidx
         import numpy
         import sgkit
         import xarray
-        fasta = pysam.FastaFile(input[0])
-        # NB! We put in an extra character at the start to convert to 1 based coords.
-        codec = 'utf-32-le' if sys.byteorder == 'little' else 'utf-32-be'
-        ancestral_sequence = "X" + fasta.fetch(reference=fasta.references[0])
-        ancestral_sequence = numpy.frombuffer(bytearray(ancestral_sequence,codec), dtype="U1")
+        fasta = pyfaidx.Fasta(input[0])
+        seq_name = list(fasta.keys())[0]
+        print("Ancestral sequence:", seq_name)
+        ancestral_sequence = numpy.asarray(fasta[seq_name], dtype="U1")
         # From the human ancestral states README:
         # The convention for the sequence is:
         #    ACTG : high-confidence call, ancestral state supported by other 2 sequences
@@ -91,7 +90,7 @@ rule load_ancestral_fasta:
         #    .    : no coverage in the alignment
         ds_dir = input[1].replace(".vcf_done", "")
         ds = sgkit.load_dataset(ds_dir)
-        ancestral_states = numpy.char.upper(ancestral_sequence[ds['variant_position'].values])
+        ancestral_states = numpy.char.upper(ancestral_sequence[ds['variant_position'].values-1])
         ancestral_states = xarray.DataArray(data=ancestral_states, dims=["variants"], name="variant_ancestral_allele")
         ds.update({"variant_ancestral_allele": ancestral_states})
         sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_ancestral_allele"}), ds_dir, mode="a")
@@ -281,6 +280,7 @@ rule subset_zarr_vcf:
 
 def get_ancestor_gen_memory(wildcards):
     import numpy
+    import json
     #Use the checkpoint to check the stats file exists
     checkpoint_output = checkpoints.summary_table.get()
     vcf_stats = data_dir/"zarr_stats"/wildcards.vcf_name/"stats.json"
