@@ -17,9 +17,9 @@ localrules: all, summary_table
 rule all:
     input:
         data_dir/"vcf_summary_table.csv",
-        expand(data_dir/"ancestors"/"{vcf_name}-subset-{subset}"/"ancestors.trees",
+            expand(data_dir/ "trees" / "{vcf_name}-subset-{sample_ids_file}" / "{vcf_name}-subset-{sample_ids_file}.trees",
             vcf_name=config["vcfs"].keys(),
-            subset=[config['sample_ids_file'].replace("/", "--")]
+            sample_ids_file=[config['sample_ids_file'].replace("/", "--")]
         )
 
 
@@ -370,7 +370,8 @@ rule match_ancestors:
         ancestors = tsinfer.AncestorData.load(input[0])
         sample_data = tsinfer.SgkitSampleData(input[1])
         os.makedirs(data_dir/"progress"/"match_ancestors", exist_ok=True)
-        os.makedirs(data_dir / "resume" / "match_ancestors", exist_ok=True)
+        os.makedirs(data_dir/"resume"/"match_ancestors", exist_ok=True)
+        os.makedirs(os.path.dirname(output[0]), exist_ok=True)
         client = Client(config["scheduler_address"])
         with open(data_dir/"progress"/"match_ancestors"/f"{wildcards.vcf_name}-{wildcards.sample_ids_file}.log", "w") as log_f:
             with performance_report(
@@ -384,37 +385,40 @@ rule match_ancestors:
                     precision=15,
                     progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30}),
                     resume_lmdb_file=str(data_dir/"resume"/"match_ancestors"/f"{wildcards.vcf_name}-{wildcards.sample_ids_file}.lmdb"),
-                    dask=True,
+                    use_dask=True,
                 )
         ts.dump(output[0])
 
-# rule match_samples:
-#     input:
-#         data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors.zarr",
-#         data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr",
-#     output:
-#         data_dir / "ancestors" / "{vcf_name}-subset-{sample_ids_file}" / "out.trees"
-#
-#     threads: 24
-#     resources:
-#         time_min=6 * 30 * 24 * 60, #6 months
-#         runtime=6 * 30 * 24 * 60
-#     run:
-#         import tsinfer
-#         import logging
-#         logging.basicConfig(level=logging.INFO)
-#
-#         ancestors = tsinfer.AncestorData.load(input[0])
-#         sample_data = tsinfer.SgkitSampleData(input[1])
-#
-#         inference_pos = ancestors.sites_position[:]
-#
-#         os.makedirs(data_dir/"progress"/"match_ancestors", exist_ok=True)
-#         with open(data_dir/"progress"/"match_ancestors"/f"{wildcards.vcf_name}.log", "w") as log_f:
-#             ts = tsinfer.match_ancestors(
-#                 sample_data,
-#                 ancestors,
-#                 num_threads=threads,
-#                 progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30})
-#             )
-#         ts.dump(output[0])
+rule match_samples:
+    input:
+        data_dir/"ancestors"/"{vcf_name}-subset-{sample_ids_file}"/"ancestors.trees",
+        data_dir/"zarr_vcfs_subsets"/"{vcf_name}-subset-{sample_ids_file}"/"data.zarr",
+    output:
+        data_dir/"trees"/"{vcf_name}-subset-{sample_ids_file}"/"{vcf_name}-subset-{sample_ids_file}.trees"
+    #Minimal threads as we're using dask
+    threads: 2
+    resources:
+        time_min=6 * 30 * 24 * 60, #6 months
+        runtime=6 * 30 * 24 * 60
+    run:
+        import tsinfer
+        import logging
+        import tskit
+        logging.basicConfig(level=logging.INFO)
+        anc_ts = tskit.load(input[0])
+        sample_data = tsinfer.SgkitSampleData(input[1])
+        os.makedirs(data_dir/"progress"/"match_ancestors", exist_ok=True)
+        os.makedirs(data_dir /"resume"/"match_samples",exist_ok=True)
+        os.makedirs(os.path.dirname(output[0]),exist_ok=True)
+        with open(data_dir/"progress"/"match_ancestors"/f"{wildcards.vcf_name}.log", "w") as log_f:
+            ts = tsinfer.match_samples(
+                sample_data,
+                anc_ts,
+                path_compression=True,
+                num_threads=threads,
+                precision=15,
+                progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30}),
+                resume_lmdb_file = str(data_dir / "resume" / "match_samples" / f"{wildcards.vcf_name}-{wildcards.sample_ids_file}.lmdb"),
+                use_dask=True,
+            )
+        ts.dump(output[0])
