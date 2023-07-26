@@ -22,9 +22,10 @@ def parse_region(region):
 rule all:
     input:
         expand(data_dir/"{subset_name}-region_summary_table.csv", subset_name=config["sample_subsets"].keys()),
-        expand(data_dir/ "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}.trees",
+        expand(data_dir/ "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-mm{mismatch}.trees",
             subset_name=config["sample_subsets"].keys(),
             region_name=config["regions"].keys(),
+            mismatch=config["mismatch_values"],
         )
 
 
@@ -176,9 +177,10 @@ rule subset_zarr_vcf:
         ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
         with open(input[-1],'r') as f:
             sample_ids = numpy.genfromtxt(f,dtype=str)
-        mask = numpy.isin(ds.sample_id.values, sample_ids)
-        ds = ds.sel(samples=mask)
-        ds.set_index(variants=("variant_position")).sel(variants=slice(start,end))
+        sample_mask = numpy.isin(ds.sample_id.values, sample_ids)
+        variant_position = ds['variant_position'].values
+        variant_mask = numpy.logical_and(variant_position >= start, variant_position < end)
+        ds = ds.sel(samples=sample_mask, variants=variant_mask)
         ds = ds.unify_chunks()
         sgkit.save_dataset(ds,output[0].replace(".vcf_done", ""), auto_rechunk=True)
         Path(str(output[0])).touch()
@@ -392,10 +394,11 @@ rule match_ancestors:
 rule match_samples:
     input:
         data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors.trees",
-        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr"
+        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr",
+        lambda wildcards: config['recomb_map'].format(chrom=parse_region(config['regions'][wildcards.region_name])[0])
     output:
-        data_dir/"trees"/"{subset_name}-{region_name}"/"{subset_name}-{region_name}.trees",
-        data_dir/"samples"/"{subset_name}-{region_name}"/"performance_report.html"
+        data_dir/"trees"/"{subset_name}-{region_name}"/"{subset_name}-{region_name}-mm{mismatch}.trees",
+        data_dir/"samples"/"{subset_name}-{region_name}-mm{mismatch}"/"performance_report.html"
 
     #Minimal threads as we're using dask
     threads: 2
@@ -407,6 +410,9 @@ rule match_samples:
         import tsinfer
         import logging
         import tskit
+        import numpy
+        import msprime
+
         logging.basicConfig(level=logging.INFO)
         client = Client(config["scheduler_address"])
         anc_ts = tskit.load(input[0])
@@ -414,7 +420,34 @@ rule match_samples:
         os.makedirs(data_dir/"progress"/"match_samples", exist_ok=True)
         os.makedirs(data_dir /"resume"/"match_samples",exist_ok=True)
         os.makedirs(os.path.dirname(output[0]),exist_ok=True)
-        with open(data_dir/"progress"/"match_samples"/f"{wildcards.subset_name}-{wildcards.region_name}.log", "w") as log_f:
+        mismatch = float(wildcards.mismatch)
+        if mismatch > 0:
+            inference_pos = anc_ts.tables.sites.position
+            rate_map = msprime.RateMap.read_hapmap(
+                input[-1],
+                position_col=1,
+                rate_col=2
+            )
+            genetic_dists = tsinfer.Matcher.recombination_rate_to_dist(
+                rate_map,inference_pos
+            )
+            recombination_map = tsinfer.Matcher.recombination_dist_to_prob(genetic_dists)
+            #Set 0 probabilities to a small value
+            recombination_map[recombination_map == 0] = 1e-19
+            mismatch_ratio = mismatch
+            num_alleles = 2
+            mismatch_map = numpy.full(
+                len(inference_pos),
+                tsinfer.Matcher.mismatch_ratio_to_prob(
+                    mismatch_ratio,
+                    numpy.median(genetic_dists),
+                    num_alleles
+                )
+            )
+        else:
+            recombination_map = None
+            mismatch_map = None
+        with open(data_dir/"progress"/"match_samples"/f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.mismatch}.log", "w") as log_f:
             with performance_report(
                     filename=output[1]
             ):
@@ -423,9 +456,11 @@ rule match_samples:
                     anc_ts,
                     path_compression=True,
                     num_threads=threads,
+                    recombination=recombination_map,
+                    mismatch=mismatch_map,
                     precision=15,
                     progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30}),
-                    resume_lmdb_file = str(data_dir / "resume" / "match_samples" / f"{wildcards.subset_name}-{wildcards.region_name}.lmdb"),
+                    resume_lmdb_file = str(data_dir / "resume" / "match_samples" / f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.mismatch}.lmdb"),
                     use_dask=True,
                 )
         ts.dump(output[0])
