@@ -297,15 +297,9 @@ def get_ancestor_gen_memory(wildcards):
         n_sites = stats['n_variants']
         n_masked = stats['sites_masked']
         ac1 = sum([ac == 1 for ac in stats['allele_counts']])
-        mem = int(5_000 + (((n_sites-n_masked) - ac1) * n_samples * n_ploidy) / (8 * 1_048_576))
+        mem = int(16_000 + (((n_sites-n_masked) - ac1) * n_samples * n_ploidy) / (8 * 1_048_576))
         return mem
 
-def get_ancestor_cpus(wildcards):
-    import math
-    #Use the checkpoint to check the stats file exists
-    checkpoint_output = checkpoints.summary_table.get(subset_name=wildcards.subset_name)
-    #For the GEL cluster, at least, we must ask for more CPUs to get more memory
-    return max(4, math.ceil(get_ancestor_gen_memory(wildcards) / 16_000))
 
 rule generate_ancestors:
     input:
@@ -313,7 +307,7 @@ rule generate_ancestors:
         data_dir/"zarr_stats"/"{subset_name}-{region_name}"/"stats.json"
     output:
         data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors.zarr"
-    threads: get_ancestor_cpus
+    threads: config['max_threads']
     resources:
         mem_mb=get_ancestor_gen_memory,
         time_min=24 * 60,
@@ -323,14 +317,13 @@ rule generate_ancestors:
         import logging
         logging.basicConfig(level=logging.INFO)
         sample_data = tsinfer.SgkitSampleData(input[0])
-        #Limit the threads to 8 as it too many leads to contention
         os.makedirs(data_dir/"progress"/"generate_ancestors", exist_ok=True)
         with open(data_dir/"progress"/"generate_ancestors"/f"{wildcards.subset_name}-{wildcards.region_name}.log", "w") as log_f:
              tsinfer.generate_ancestors(
                  sample_data,
                  path=output[0],
                  genotype_encoding=1,
-                 num_threads=min(threads,8),
+                 num_threads=threads,
                  progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30})
              )
 
@@ -358,38 +351,55 @@ rule match_ancestors:
     output:
         data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors.trees",
         data_dir/"ancestors"/"{subset_name}-{region_name}"/"performance_report.html"
-    #Minimal threads as we're using dask
-    threads: 2
+    threads: config['max_threads']
     resources:
-        mem_mb = 32000,
+        mem_mb = config['max_mem'],
         time_min=6 * 30 * 24 * 60, #6 months
         runtime=6 * 30 * 24 * 60
     run:
         import tsinfer
         import logging
         import os
+        import asyncio
+        import threading
+        from distributed import Worker
+
         logging.basicConfig(level=logging.INFO)
         ancestors = tsinfer.AncestorData.load(input[0])
         sample_data = tsinfer.SgkitSampleData(input[1])
         os.makedirs(data_dir/"progress"/"match_ancestors", exist_ok=True)
         os.makedirs(data_dir/"resume"/"match_ancestors", exist_ok=True)
         os.makedirs(os.path.dirname(output[0]), exist_ok=True)
-        client = Client(config["scheduler_address"])
-        with open(data_dir/"progress"/"match_ancestors"/f"{wildcards.subset_name}-{wildcards.region_name}.log", "w") as log_f:
-            with performance_report(
-                    filename=output[1]
-            ):
-                ts = tsinfer.match_ancestors(
-                    sample_data,
-                    ancestors,
-                    path_compression=True,
-                    num_threads=threads,
-                    precision=15,
-                    progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30}),
-                    resume_lmdb_file=str(data_dir/"resume"/"match_ancestors"/f"{wildcards.subset_name}-{wildcards.region_name}.lmdb"),
-                    use_dask=True,
+        async def run_match_ancestors_with_workers():
+            # We want to be able to use local CPUs for the small epochs, and then scale out for the large ones.
+            # When scaling out this would leave the local CPUs idle so we launch local workers too
+            with open("worker.log", "w") as log_file:
+                worker_process = subprocess.Popen(
+                    ["dask-worker", config['scheduler_address']],
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
                 )
-        ts.dump(output[0])
+                try:
+                    with open(data_dir/"progress"/"match_ancestors"/f"{wildcards.subset_name}-{wildcards.region_name}.log", "w") as log_f, Client(config["scheduler_address"]) as client, performance_report(filename=output[1]):
+                        ts = tsinfer.match_ancestors(
+                            sample_data,
+                            ancestors,
+                            path_compression=True,
+                            num_threads=threads,
+                            precision=15,
+                            progress_monitor=tsinfer.progress.ProgressMonitor(tqdm_kwargs={'file':log_f, 'mininterval':30}),
+                            resume_lmdb_file=str(data_dir/"resume"/"match_ancestors"/f"{wildcards.subset_name}-{wildcards.region_name}.lmdb"),
+                            use_dask=True,
+                        )
+                    ts.dump(output[0])
+                finally:
+                    worker_process.terminate()
+                    worker_process.wait()
+            
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run_match_ancestors_with_workers())
+
 
 rule match_samples:
     input:
@@ -399,7 +409,6 @@ rule match_samples:
     output:
         data_dir/"trees"/"{subset_name}-{region_name}"/"{subset_name}-{region_name}-mm{mismatch}.trees",
         data_dir/"samples"/"{subset_name}-{region_name}-mm{mismatch}"/"performance_report.html"
-
     #Minimal threads as we're using dask
     threads: 2
     resources:
