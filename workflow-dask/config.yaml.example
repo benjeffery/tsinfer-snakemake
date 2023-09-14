@@ -86,6 +86,9 @@ cluster:
 # Alternatively, specify a dask cluster directly
 #scheduler_address
 
+max_threads: 96
+max_memory: 750GB
+
 custom_resources:
   dask_cluster: 1
 
