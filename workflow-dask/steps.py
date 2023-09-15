@@ -232,12 +232,12 @@ def match_ancestors(input, output, wildcards, config, threads):
     os.makedirs(data_dir / "progress" / "match_ancestors", exist_ok=True)
     os.makedirs(data_dir / "resume" / "match_ancestors", exist_ok=True)
     os.makedirs(os.path.dirname(output[0]), exist_ok=True)
-
+    slug = f"{subset_name}-{region_name}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
     async def run_match_ancestors_with_workers():
         # We want to be able to use local CPUs for the small epochs, and then scale out for the large ones.
         # When scaling out this would leave the local CPUs idle so we launch local workers too
         os.makedirs(data_dir / "local_worker_logs", exist_ok=True)
-        with open(f"{data_dir}/local_worker_logs/{subset_name}-{region_name}-{str(uuid.uuid4())}.log",
+        with open(f"{data_dir}/local_worker_logs/{slug}-{str(uuid.uuid4())}.log",
                   "w") as log_file:
             worker_process = subprocess.Popen(
                 ["dask-worker", config['scheduler_address']],
@@ -246,7 +246,7 @@ def match_ancestors(input, output, wildcards, config, threads):
             )
             try:
                 with open(
-                        data_dir / "progress" / "match_ancestors" / f"{wildcards.subset_name}-{wildcards.region_name}.log",
+                        data_dir / "progress" / "match_ancestors" / f"{slug}.log",
                         "w") as log_f, Client(config["scheduler_address"]) as client, performance_report(filename=output[1]):
                     # Disable dask's aggressive memory management
                     client.amm.stop()
@@ -259,7 +259,7 @@ def match_ancestors(input, output, wildcards, config, threads):
                         progress_monitor=tsinfer.progress.ProgressMonitor(
                             tqdm_kwargs={'file': log_f, 'mininterval': 30}),
                         resume_lmdb_file=str(
-                            data_dir / "resume" / "match_ancestors" / f"{wildcards.subset_name}-{wildcards.region_name}.lmdb"),
+                            data_dir / "resume" / "match_ancestors" / f"{slug}.lmdb"),
                         use_dask=True,
                     )
                 ts.dump(output[0])
@@ -316,7 +316,8 @@ def match_samples(input, output, wildcards, config, threads):
     else:
         recombination_map = None
         mismatch_map = None
-    with open(            data_dir / "progress" / "match_samples" / f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.mismatch}.log","w") as log_f,        Client(config["scheduler_address"]) as client,        performance_report(filename=output[1]):
+    slug= f"{wildcards.subset_name}-{wildcards.region_name}-mm-{wildcards.mismatch}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
+    with open(data_dir / "progress" / "match_samples" / f"{slug}.log","w") as log_f,        Client(config["scheduler_address"]) as client,        performance_report(filename=output[1]):
         #Disable dask's aggressive memory management
         client.amm.stop()
         ts = tsinfer.match_samples(
@@ -330,7 +331,7 @@ def match_samples(input, output, wildcards, config, threads):
             progress_monitor=tsinfer.progress.ProgressMonitor(
                 tqdm_kwargs={'file': log_f, 'mininterval': 30}),
             resume_lmdb_file=str(
-                data_dir / "resume" / "match_samples" / f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.mismatch}.lmdb"),
+                data_dir / "resume" / "match_samples" / f"{slug}.lmdb"),
             use_dask=True,
         )
     ts.dump(output[0])

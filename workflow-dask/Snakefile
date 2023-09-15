@@ -17,10 +17,11 @@ localrules: all, summary_table
 rule all:
     input:
         expand(data_dir/"{subset_name}-region_summary_table.csv", subset_name=config["sample_subsets"].keys()),
-        expand(data_dir/ "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-mm{mismatch}.trees",
+        expand(data_dir/ "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-truncate-{truncation}-mm{mismatch}.trees",
             subset_name=config["sample_subsets"].keys(),
             region_name=config["regions"].keys(),
             mismatch=config["mismatch_values"],
+            truncation=[f"{c['lower']}-{c['upper']}-{c['multiplier']}" for c in config['truncate']]
         )
 
 
@@ -165,7 +166,7 @@ rule truncate_ancestors:
     input:
         data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors.zarr"
     output:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-truncated.zarr"
+        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-truncate-{lower}-{upper}-{multiplier}.zarr"
     threads: 1
     resources:
         mem_mb=16000,
@@ -174,17 +175,26 @@ rule truncate_ancestors:
     run:
         import tsinfer
         import logging
+        import shutil
+        lower = float(wildcards.lower)
+        upper = float(wildcards.upper)
+        multiplier = float(wildcards.multiplier)
+
         logging.basicConfig(level=logging.INFO)
-        ancestors = tsinfer.AncestorData.load(input[0])
-        truncated = ancestors.truncate_ancestors(0.4, 0.6, length_multiplier=1, path=output[0])
+        if lower == 0 and upper == 0 and multiplier == 0:
+            #No truncation, just copy the file using the OS
+            shutil.copy(input[0], output[0])
+        else:
+            ancestors = tsinfer.AncestorData.load(input[0])
+            truncated = ancestors.truncate_ancestors(lower, upper, length_multiplier=multiplier, path=output[0])
 
 rule match_ancestors:
     input:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-truncated.zarr",
+        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-truncate-{lower}-{upper}-{multiplier}.zarr",
         data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr",
     output:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors.trees",
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"performance_report.html"
+        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
+        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-truncate-{lower}-{upper}-{multiplier}-performance_report.html"
     threads: config['max_threads']
     resources:
         mem_mb = config['max_mem'],
@@ -196,12 +206,12 @@ rule match_ancestors:
 
 rule match_samples:
     input:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors.trees",
+        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
         data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr",
         lambda wildcards: config['recomb_map'].format(chrom=steps.parse_region(config['regions'][wildcards.region_name])[0])
     output:
-        data_dir/"trees"/"{subset_name}-{region_name}"/"{subset_name}-{region_name}-mm{mismatch}.trees",
-        data_dir/"samples"/"{subset_name}-{region_name}-mm{mismatch}"/"performance_report.html"
+        data_dir/"trees"/"{subset_name}-{region_name}"/"{subset_name}-{region_name}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}.trees",
+        data_dir/"samples"/"{subset_name}-{region_name}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"/"performance_report.html"
     #Minimal threads as we're using dask
     threads: 2
     resources:
