@@ -252,7 +252,43 @@ def summary_table(input, output, wildcards, config, params):
                 writer.writerow(row_dict)
 
 
-def match_ancestors(input, output, wildcards, config, threads):
+def generate_ancestors(input, output, wildcards, config, threads):
+    import tsinfer
+    import logging
+    import os
+    from pathlib import Path
+    import sgkit
+
+    logging.basicConfig(level=logging.INFO)
+    data_dir = Path(config['data_dir'])
+    sample_data = tsinfer.SgkitSampleData(input[0])
+    ds = sgkit.load_dataset(input[0])
+    aa_ac = ds['variant_ancestral_allele_counts'][ds['variant_mask'].values].values
+    fixed_sites = (aa_ac == 0)
+    n_minus_1_sites = (aa_ac == 1)
+    n_minus_2_sites = (aa_ac == 2)
+    print(f"Fixed sites: {fixed_sites.sum()}")
+    print(f"n-1 sites: {n_minus_1_sites.sum()}")
+    print(f"n-2 sites: {n_minus_2_sites.sum()}")
+    filtered_sites = fixed_sites | n_minus_1_sites | n_minus_2_sites
+    print(f"Total filtered sites: {filtered_sites.sum()}")
+    filtered_positions = ds['variant_position'][ds['variant_mask'].values].values[filtered_sites]
+    os.makedirs(data_dir / "progress" / "generate_ancestors", exist_ok=True)
+    with open(
+            data_dir / "progress" / "generate_ancestors" / f"{wildcards.subset_name}-{wildcards.region_name}.log",
+            "w") as log_f:
+        tsinfer.generate_ancestors(
+            sample_data,
+            path=output[0],
+            genotype_encoding=1,
+            exclude_positions=filtered_positions,
+            num_threads=threads,
+            progress_monitor=tsinfer.progress.ProgressMonitor(
+                tqdm_kwargs={'file': log_f, 'mininterval': 30})
+        )
+
+
+def match_ancestors(input, output, wildcards, config, threads, slug):
     import tsinfer
     import logging
     import os
@@ -267,12 +303,9 @@ def match_ancestors(input, output, wildcards, config, threads):
     data_dir = Path(config['data_dir'])
     ancestors = tsinfer.AncestorData.load(input[0])
     sample_data = tsinfer.SgkitSampleData(input[1])
-    subset_name = wildcards.subset_name
-    region_name = wildcards.region_name
     os.makedirs(data_dir / "progress" / "match_ancestors", exist_ok=True)
     os.makedirs(data_dir / "resume" / "match_ancestors", exist_ok=True)
     os.makedirs(os.path.dirname(output[0]), exist_ok=True)
-    slug = f"{subset_name}-{region_name}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
     async def run_match_ancestors_with_workers():
         # We want to be able to use local CPUs for the small epochs, and then scale out for the large ones.
         # When scaling out this would leave the local CPUs idle so we launch local workers too
@@ -311,7 +344,7 @@ def match_ancestors(input, output, wildcards, config, threads):
     asyncio.set_event_loop(loop)
     loop.run_until_complete(run_match_ancestors_with_workers())
 
-def match_samples(input, output, wildcards, config, threads):
+def match_samples(input, output, wildcards, config, threads, slug):
     import tsinfer
     import logging
     import tskit
@@ -356,7 +389,6 @@ def match_samples(input, output, wildcards, config, threads):
     else:
         recombination_map = None
         mismatch_map = None
-    slug= f"{wildcards.subset_name}-{wildcards.region_name}-mm-{wildcards.mismatch}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
     with open(data_dir / "progress" / "match_samples" / f"{slug}.log","w") as log_f,        Client(config["scheduler_address"]) as client,        performance_report(filename=output[1]):
         #Disable dask's aggressive memory management
         client.amm.stop()
