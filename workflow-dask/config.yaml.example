@@ -51,6 +51,11 @@ regions:
 
 mismatch_values: [1, 0.5, 0]
 
+truncate:
+  - lower: 0.4
+    upper: 0.6
+    multiplier: 1
+
 data_dir: "data/workflow"
 temp_dir: "data/workflow/temp"
 sample_subsets:
