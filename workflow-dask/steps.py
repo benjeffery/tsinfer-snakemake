@@ -111,6 +111,8 @@ def mask_sites(input, output, wildcards, config, params):
     sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_mask"}), ds_dir,
                        mode="a")
 
+
+
 def subset_zarr_vcf(input, output, wildcards, config, params):
     import numpy
     import sgkit
@@ -133,11 +135,15 @@ def subset_zarr_vcf(input, output, wildcards, config, params):
 def zarr_stats(input, output, wildcards, config, params):
     import sgkit
     import json
+    import numpy
     import os
     from dask.distributed import Client
+    import matplotlib.pyplot as plt
+    import xarray as xr
 
+    ds_dir = input[0].replace(".vcf_done", "")
     with Client(config["scheduler_address"]) as client:
-        ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
+        ds = sgkit.load_dataset(ds_dir)
         out = {}
         out['dataset_summary'] = str(ds)
         out['name'] = wildcards.region_name
@@ -154,13 +160,47 @@ def zarr_stats(input, output, wildcards, config, params):
         out['sites_duplicate_pos'] = int((~ds.variant_duplicate_position_mask).sum())
         out['sites_masked'] = int((~ds.variant_mask).sum())
         total_size = 0
-        for dirpath, dirnames, filenames in os.walk(input[0].replace(".vcf_done", "")):
+        for dirpath, dirnames, filenames in os.walk(ds_dir):
             for f in filenames:
                 fp = os.path.join(dirpath, f)
                 total_size += os.path.getsize(fp)
         out['size'] = total_size
         with open(output[0], "w") as f:
             f.write(json.dumps(out))
+
+        # Store the allele counts for later filtering
+        # Note that no missingness is assumed
+        ac = sgkit.count_call_alleles(ds, merge=False)['call_allele_count'].sum(dim="samples").values
+        num_samples = ds.dims['samples'] * ds.dims['ploidy']
+
+        # Normal non-ref allele count:
+        ref_ac = ac[:, 0]
+
+        # Calculate the ancestral allele index
+        allele_matches = (ds['variant_allele'] == ds['variant_ancestral_allele']).values
+        ancestral_indices = numpy.argmax(allele_matches, axis=1)
+        # Mark unknown ancestral alleles as REF
+        ancestral_indices[numpy.sum(allele_matches, axis=1) == 0] = 0
+
+        # Calculate the allele count for the ancestral allele
+        aa_ac = ac[numpy.arange(len(ancestral_indices)), ancestral_indices]
+
+        #Plot the allele count spectrum
+        plt.hist(ref_ac, bins=200, log=True, histtype='step', label="Ref allele count")
+        plt.hist(aa_ac, bins=200, log=True, histtype='step', label="Ancestral allele count")
+        plt.title('Allele count spectrum')
+        plt.xlabel('Allele count')
+        plt.ylabel('Number of sites')
+        plt.legend()
+        plt.savefig(f"{config['data_dir']}/zarr_stats/{wildcards.subset_name}-{wildcards.region_name}/ac.png")
+
+        # Save the ancestral allele counts to the dataset
+        aa_ac = xr.DataArray(aa_ac, dims=["variants"], name="variant_ancestral_allele_counts")
+        ds.update({"variant_ancestral_allele_counts": aa_ac})
+        sgkit.save_dataset(
+             ds.drop_vars(set(ds.data_vars) - {"variant_ancestral_allele_counts"}),
+         ds_dir, mode="a")
+
 
 def summary_table(input, output, wildcards, config, params):
     import csv
