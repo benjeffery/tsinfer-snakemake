@@ -17,7 +17,7 @@ localrules: all, summary_table
 rule all:
     input:
         expand(data_dir/"{subset_name}-region_summary_table.csv", subset_name=config["sample_subsets"].keys()),
-        expand(data_dir/ "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-nton-filter-truncate-{truncation}-mm{mismatch}.trees",
+        expand(data_dir/ "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-nton-filter-truncate-{truncation}-mm{mismatch}-post-processed.trees",
             subset_name=config["sample_subsets"].keys(),
             region_name=config["regions"].keys(),
             mismatch=config["mismatch_values"],
@@ -199,7 +199,7 @@ rule match_samples:
         data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr",
         lambda wildcards: config['recomb_map'].format(chrom=steps.parse_region(config['regions'][wildcards.region_name])[0])
     output:
-        data_dir/"trees"/"{subset_name}-{region_name}"/"{subset_name}-{region_name}-nton-filter-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}.trees",
+        data_dir/"trees"/"{subset_name}-{region_name}"/"{subset_name}-{region_name}-nton-filter-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
         data_dir/"samples"/"{subset_name}-{region_name}-nton-filter-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"/"performance_report.html"
     #Minimal threads as we're using dask
     threads: 2
@@ -210,3 +210,21 @@ rule match_samples:
     run:
         slug = f"{wildcards.subset_name}-{wildcards.region_name}-mm-{wildcards.mismatch}-nton-filter-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
         steps.match_samples(input, output, wildcards, config, threads, slug)
+
+rule post_process:
+    input:
+        data_dir / "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-nton-filter-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees"
+    output:
+        data_dir / "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-nton-filter-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed.trees",
+    # Post process is currently not done in parallel
+    threads: 2
+    resources:
+        mem_mb = 64000,
+        time_min = 6 * 30 * 24 * 60, #6 months
+        runtime = 6 * 30 * 24 * 60
+    run:
+        import tsinfer
+        import tskit
+        ts = tskit.load(input[0])
+        ts = tsinfer.post_process(ts)
+        ts.dump(output[0])
