@@ -405,5 +405,6 @@ def match_samples(input, output, wildcards, config, threads, slug):
             resume_lmdb_file=str(
                 data_dir / "resume" / "match_samples" / f"{slug}.lmdb"),
             use_dask=True,
+            post_process=False
         )
     ts.dump(output[0])
