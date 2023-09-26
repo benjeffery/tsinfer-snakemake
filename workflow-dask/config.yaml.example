@@ -1,3 +1,6 @@
+# File locations - note the {chrom} interpolations, which will be filled by
+# the values from regions below
+
 ancestral_fasta: data/homo_sapiens_ancestor_GRCh38/homo_sapiens_ancestor_{chrom}.fa
 vcf: data/chr{chrom}.vcf.gz
 recomb_map: data/HapMapII_GRCh38/genetic_map_Hg38_chr{chrom}.txt
@@ -49,18 +52,32 @@ regions:
 #  chr22p: 22:1-15000000
   chr22q: 22:15000001-50791377
 
-mismatch_values: [1, 0.5, 0]
 
+# A list of the mismatch values to use
+mismatch_values: [0, 1.0e-9]
+
+# A list of truncation options to run, note that
+# all zeros disables truncation
 truncate:
+  - lower: 0
+    upper: 0
+    multiplier: 0
   - lower: 0.4
     upper: 0.6
     multiplier: 1
 
+# Directory to keep output, progess and resume files
 data_dir: "data/workflow"
-temp_dir: "data/workflow/temp"
-sample_subsets:
-  subsetName: "data/subset.csv"
 
+# Directory to keep temporary files
+temp_dir: "data/workflow/temp"
+
+# A dict of subsets to run
+sample_subsets:
+  subset1: "data/subset.csv"
+  subset_bob: "data/bob_subset.csv"
+
+# Place dask config here
 dask:
   distributed.scheduler.allowed-failures: 10
   distributed.scheduler.worker-saturation: 1.1
@@ -91,8 +108,12 @@ cluster:
 # Alternatively, specify a dask cluster directly
 #scheduler_address
 
+# Max threads that will be submitted to the cluster/local
 max_threads: 96
-max_memory: 750GB
+
+# Max mem to ask the cluster for
+max_mem: 750GB
+
 
 custom_resources:
   dask_cluster: 1
