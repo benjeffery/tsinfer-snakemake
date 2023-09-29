@@ -53,7 +53,8 @@ regions:
   chr22q: 22:15000001-50791377
 
 
-# A list of the mismatch values to use
+# A list of the mismatch values to use, note that a non-zero mismatch value
+# results in about 5x slower runtimes.
 mismatch_values: [0, 1.0e-9]
 
 # A list of truncation options to run, note that
@@ -66,7 +67,8 @@ truncate:
     upper: 0.6
     multiplier: 1
 
-# Pre-tsinfer filters
+# Pre-tsinfer filters. Each entry is a named filter set that will be run.
+# Any of the filters defined in filters.py can be referenced here.
 filters:
   filter_minimal:
     duplicate_position:
@@ -81,13 +83,35 @@ filters:
         min_derived: 2
         min_ancestral: 3
 
-# Directory to keep output, progess and resume files
+vcf_to_zarr:
+  # These parameters influence the peak RAM usage of the vcf_to_zarr steps
+  # For a ~100,000 samples VCF these settings result in about 16GB peak RAM usage
+  # per core. If you have less RAM or more samples you may need to reduce the
+  # values here, keeping chunk_length > temp_chunk_length > read_chunk_length.
+  read_chunk_length: 10000
+  temp_chunk_length: 20000
+  chunk_length: 40000
+  chunk_width: 1500
+  # Temp files are deleted serially, so with large VCFs on slow NFS mounts this
+  # can take a long time. If you have a fast filesystem you can set this to False
+  retain_temp_files: True
+
+# Dask is optional for the following steps, if you're on a single machine set these
+# to False
+match_ancestors:
+  use_dask: True
+match_samples:
+  use_dask: True
+
+# Directory to keep output, progress and resume files
 data_dir: "data/workflow"
 
 # Directory to keep temporary files
 temp_dir: "data/workflow/temp"
 
 # A dict of subsets to run
+# Key names will be used in the output file names, the referenced file should
+# be a CSV with a single, header-less column containing the sample IDs to include.
 sample_subsets:
   subset1: "data/subset.csv"
   subset_bob: "data/bob_subset.csv"
@@ -121,7 +145,7 @@ cluster:
   class: dask.distributed.LocalCluster
 
 # Alternatively, specify a dask cluster directly
-#scheduler_address
+# scheduler_address: "tcp://x.x.x.x:xxxxx"
 
 # Max threads that will be submitted to the cluster/local
 max_threads: 96
@@ -129,9 +153,14 @@ max_threads: 96
 # Max mem to ask the cluster for
 max_mem: 750GB
 
+# Max time to ask the cluster for in minutes
+max_time: 262800 # 6 months
 
 custom_resources:
-  dask_cluster: 1
+  # Each snakemake task that uses the dask cluster can run while other tasks
+  # are using the same cluster. In order to not overload the cluster
+  # we assign a usage in arbitrary units. With the max being 10.
+  dask_cluster: 10
 
 prefix: ""
 #prefix: "module load python/3.8.2 && source tsinfer-env/bin/activate"
