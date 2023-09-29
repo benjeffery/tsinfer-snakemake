@@ -16,10 +16,14 @@ localrules: all, summary_table
 
 rule all:
     input:
-        expand(data_dir/"{subset_name}-region_summary_table.csv", subset_name=config["sample_subsets"].keys()),
-        expand(data_dir/ "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-nton-filter-truncate-{truncation}-mm{mismatch}-post-processed.trees",
+        expand(data_dir/"{subset_name}-{filter}-region_summary_table.csv",
+            subset_name=config["sample_subsets"].keys(),
+            filter=config["filters"].keys()
+        ),
+        expand(data_dir/ "trees" / "{subset_name}-{region_name}-{filter}" / "{subset_name}-{region_name}-{filter}-truncate-{truncation}-mm{mismatch}-post-processed.trees",
             subset_name=config["sample_subsets"].keys(),
             region_name=config["regions"].keys(),
+            filter=config["filters"].keys(),
             mismatch=config["mismatch_values"],
             truncation=[f"{c['lower']}-{c['upper']}-{c['multiplier']}" for c in config['truncate']]
         )
@@ -61,12 +65,11 @@ rule load_ancestral_fasta:
     run:
         steps.load_ancestral_fasta(input, output, wildcards, config, params)
 
-rule mask_sites:
+rule pre_subset_filters:
     input:
         data_dir/"zarr_vcfs"/"chr{chrom_num}"/"data.zarr"/".vcf_done",
         data_dir/"zarr_vcfs"/"chr{chrom_num}"/"data.zarr"/"variant_ancestral_allele"
     output:
-        directory(data_dir/"zarr_vcfs"/"chr{chrom_num}"/"data.zarr"/"variant_mask"),
         directory(data_dir/"zarr_vcfs"/"chr{chrom_num}"/"data.zarr"/"variant_duplicate_position_mask"),
         directory(data_dir/"zarr_vcfs"/"chr{chrom_num}"/"data.zarr"/"variant_bad_ancestral_mask"),
         directory(data_dir/"zarr_vcfs"/"chr{chrom_num}"/"data.zarr"/"variant_no_ancestral_allele_mask")
@@ -75,18 +78,16 @@ rule mask_sites:
         time_min=4 * 60,
         runtime=4 * 60
     run:
-        steps.mask_sites(input, output, wildcards, config, params)
+        steps.pre_subset_filters(input, output, wildcards, config, params)
 
 rule subset_zarr_vcf:
     input:
         lambda wildcards: [(data_dir/"zarr_vcfs"/f"chr{steps.parse_region(config['regions'][wildcards.region_name])[0]}"/"data.zarr"/suffix)
-           for suffix in [".vcf_done", "variant_ancestral_allele", "variant_mask",
-                          "variant_duplicate_position_mask", "variant_bad_ancestral_mask",
-                          "variant_no_ancestral_allele_mask"]
+           for suffix in [".vcf_done", "variant_ancestral_allele", "variant_duplicate_position_mask", "variant_bad_ancestral_mask", "variant_no_ancestral_allele_mask"]
         ],
         lambda wildcards: config['sample_subsets'][wildcards.subset_name],
     output:
-        directory(data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr")
+        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}-{filter}"/"data.zarr"/".subset_done"
     resources:
         dask_cluster=5,
         mem_mb=16000,
@@ -94,13 +95,27 @@ rule subset_zarr_vcf:
         runtime=4 * 60
     run:
         steps.subset_zarr_vcf(input, output, wildcards, config, params)
+        # We have to do this as snakemake doesn't like subsequent outputs that are children of this one
+        Path(output[0]).touch()
 
+rule post_subset_filters:
+    input:
+        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}-{filter}"/"data.zarr"/".subset_done"
+    output:
+        directory(data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}-{filter}"/"data.zarr"/"variant_mask")
+    resources:
+        dask_cluster=5,
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60
+    run:
+        steps.post_subset_filters(input, output, wildcards, config, params)
 
 rule zarr_stats:
     input:
-        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr"
+        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}-{filter}"/"data.zarr"/"variant_mask"
     output:
-        data_dir/"zarr_stats"/"{subset_name}-{region_name}"/"stats.json"
+        data_dir/"zarr_stats"/"{subset_name}-{region_name}-{filter}"/"stats.json"
     resources:
         dask_cluster=5,
         mem_mb=16000,
@@ -112,9 +127,9 @@ rule zarr_stats:
 
 checkpoint summary_table:
     input:
-        lambda wildcards: [data_dir/"zarr_stats"/f"{wildcards.subset_name}-{region_name}"/"stats.json" for region_name in config["regions"].keys()]
+        lambda wildcards: [data_dir/"zarr_stats"/f"{wildcards.subset_name}-{region_name}-{wildcards.filter}"/"stats.json" for region_name in config["regions"].keys()]
     output:
-        data_dir/"{subset_name}-region_summary_table.csv"
+        data_dir/"{subset_name}-{filter}-region_summary_table.csv"
     run:
         steps.summary_table(input, output, wildcards, config, params)
 
@@ -122,8 +137,8 @@ def get_ancestor_gen_memory(wildcards):
     import numpy
     import json
     #Use the checkpoint to check the stats file exists
-    checkpoint_output = checkpoints.summary_table.get(subset_name=wildcards.subset_name)
-    region_stats = data_dir / "zarr_stats" / f"{wildcards.subset_name}-{wildcards.region_name}" / "stats.json"
+    checkpoint_output = checkpoints.summary_table.get(subset_name=wildcards.subset_name, filter=wildcards.filter)
+    region_stats = data_dir / "zarr_stats" / f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}" / "stats.json"
     with open(region_stats, "r") as json_stats_f:
         with open(config['sample_subsets'][wildcards.subset_name],'r') as f:
             n_samples = len(numpy.genfromtxt(f,dtype=str))
@@ -138,10 +153,10 @@ def get_ancestor_gen_memory(wildcards):
 
 rule generate_ancestors:
     input:
-        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr",
-        data_dir/"zarr_stats"/"{subset_name}-{region_name}"/"stats.json"
+        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}-{filter}"/"data.zarr"/"variant_mask",
+        data_dir/"zarr_stats"/"{subset_name}-{region_name}-{filter}"/"stats.json"
     output:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-nton-filter.zarr"
+        data_dir/"ancestors"/"{subset_name}-{region_name}-{filter}"/"ancestors.zarr"
     threads: config['max_threads']
     resources:
         mem_mb=get_ancestor_gen_memory,
@@ -152,9 +167,9 @@ rule generate_ancestors:
 
 rule truncate_ancestors:
     input:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-nton-filter.zarr"
+        data_dir/"ancestors"/"{subset_name}-{region_name}-{filter}"/"ancestors.zarr"
     output:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-nton-filter-truncate-{lower}-{upper}-{multiplier}.zarr"
+        data_dir/"ancestors"/"{subset_name}-{region_name}-{filter}"/"ancestors-truncate-{lower}-{upper}-{multiplier}.zarr"
     threads: 1
     resources:
         mem_mb=16000,
@@ -178,29 +193,29 @@ rule truncate_ancestors:
 
 rule match_ancestors:
     input:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-nton-filter-truncate-{lower}-{upper}-{multiplier}.zarr",
-        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr",
+        data_dir/"ancestors"/"{subset_name}-{region_name}-{filter}"/"ancestors-truncate-{lower}-{upper}-{multiplier}.zarr",
+        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}-{filter}"/"data.zarr"/"variant_mask",
     output:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-nton-filter-truncate-{lower}-{upper}-{multiplier}.trees",
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-nton-filter-truncate-{lower}-{upper}-{multiplier}-performance_report.html"
+        data_dir/"ancestors"/"{subset_name}-{region_name}-{filter}"/"ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
+        data_dir/"ancestors"/"{subset_name}-{region_name}-{filter}"/"ancestors-truncate-{lower}-{upper}-{multiplier}-performance_report.html"
     threads: config['max_threads']
     resources:
         mem_mb = config['max_mem'],
         time_min=6 * 30 * 24 * 60, #6 months
         runtime=6 * 30 * 24 * 60
     run:
-        slug = f"{wildcards.subset_name}-{wildcards.region_name}-nton-filter-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
+        slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
         steps.match_ancestors(input, output, wildcards, config, threads, slug)
 
 
 rule match_samples:
     input:
-        data_dir/"ancestors"/"{subset_name}-{region_name}"/"ancestors-nton-filter-truncate-{lower}-{upper}-{multiplier}.trees",
-        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}"/"data.zarr",
+        data_dir/"ancestors"/"{subset_name}-{region_name}-{filter}"/"ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
+        data_dir/"zarr_vcfs_subsets"/"{subset_name}-{region_name}-{filter}"/"data.zarr"/"variant_mask",
         lambda wildcards: config['recomb_map'].format(chrom=steps.parse_region(config['regions'][wildcards.region_name])[0])
     output:
-        data_dir/"trees"/"{subset_name}-{region_name}"/"{subset_name}-{region_name}-nton-filter-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
-        data_dir/"samples"/"{subset_name}-{region_name}-nton-filter-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"/"performance_report.html"
+        data_dir/"trees"/"{subset_name}-{region_name}-{filter}"/"{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
+        data_dir/"samples"/"{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"/"performance_report.html"
     #Minimal threads as we're using dask
     threads: 2
     resources:
@@ -208,14 +223,14 @@ rule match_samples:
         time_min=6 * 30 * 24 * 60, #6 months
         runtime=6 * 30 * 24 * 60
     run:
-        slug = f"{wildcards.subset_name}-{wildcards.region_name}-mm-{wildcards.mismatch}-nton-filter-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
+        slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}-mm-{wildcards.mismatch}"
         steps.match_samples(input, output, wildcards, config, threads, slug)
 
 rule post_process:
     input:
-        data_dir / "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-nton-filter-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees"
+        data_dir / "trees" / "{subset_name}-{region_name}-{filter}" / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees"
     output:
-        data_dir / "trees" / "{subset_name}-{region_name}" / "{subset_name}-{region_name}-nton-filter-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed.trees",
+        data_dir / "trees" / "{subset_name}-{region_name}-{filter}" / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed.trees",
     # Post process is currently not done in parallel
     threads: 2
     resources:

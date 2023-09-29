@@ -66,6 +66,21 @@ truncate:
     upper: 0.6
     multiplier: 1
 
+# Pre-tsinfer filters
+filters:
+  filter_minimal:
+    duplicate_position:
+  filter_nton23:
+    duplicate_position:
+    not_snps:
+    not_biallelic:
+    bad_ancestral:
+    no_ancestral_allele:
+    low_allele_count:
+        # Note that any change to these params may not be detected by snakemake
+        min_derived: 2
+        min_ancestral: 3
+
 # Directory to keep output, progess and resume files
 data_dir: "data/workflow"
 
