@@ -330,7 +330,7 @@ def generate_ancestors(input, output, wildcards, config, threads):
         )
 
 
-def match_ancestors(input, output, wildcards, config, threads, slug):
+def match_ancestors(input, output, wildcards, config, threads, params, slug):
     import tsinfer
     import logging
     import os
@@ -375,7 +375,7 @@ def match_ancestors(input, output, wildcards, config, threads, slug):
                             tqdm_kwargs={'file': log_f, 'mininterval': 30}),
                         resume_lmdb_file=str(
                             data_dir / "resume" / "match_ancestors" / f"{slug}.lmdb"),
-                        use_dask=True,
+                        use_dask=params.use_dask,
                     )
                 ts.dump(output[0])
             finally:
@@ -386,7 +386,7 @@ def match_ancestors(input, output, wildcards, config, threads, slug):
     asyncio.set_event_loop(loop)
     loop.run_until_complete(run_match_ancestors_with_workers())
 
-def match_samples(input, output, wildcards, config, threads, slug):
+def match_samples(input, output, wildcards, config, threads, params, slug):
     import tsinfer
     import logging
     import tskit
@@ -446,7 +446,7 @@ def match_samples(input, output, wildcards, config, threads, slug):
                 tqdm_kwargs={'file': log_f, 'mininterval': 30}),
             resume_lmdb_file=str(
                 data_dir / "resume" / "match_samples" / f"{slug}.lmdb"),
-            use_dask=True,
+            use_dask=params.use_dask,
             post_process=False
         )
     ts.dump(output[0])
