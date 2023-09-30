@@ -239,8 +239,8 @@ rule post_process:
     threads: 2
     resources:
         mem_mb = 64000,
-        time_min = 6 * 30 * 24 * 60, #6 months
-        runtime = 6 * 30 * 24 * 60
+        time_min = 4 * 60,
+        runtime = 4 * 60
     run:
         import tsinfer
         import tskit
