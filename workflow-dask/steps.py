@@ -76,6 +76,7 @@ def pre_subset_filters(input, output, wildcards, config, params):
             sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {filter_name}), ds_dir, mode="a")
 
 def subset_zarr_vcf(input, output, wildcards, config, params):
+    import xarray
     import numpy
     import sgkit
     from pathlib import Path
@@ -86,10 +87,11 @@ def subset_zarr_vcf(input, output, wildcards, config, params):
         ds = sgkit.load_dataset(input[0].replace(".vcf_done", ""))
         with open(input[-1], 'r') as f:
             sample_ids = numpy.genfromtxt(f, dtype=str)
-        sample_mask = numpy.isin(ds.sample_id.values, sample_ids)
+        sample_ids = xarray.DataArray(sample_ids, dims='sample')
+        sample_mask = ds.sample_id.isin(sample_ids)
         variant_position = ds['variant_position'].values
-        variant_mask = numpy.logical_and(variant_position >= start, variant_position < end)
-        ds = ds.sel(samples=sample_mask, variants=variant_mask)
+        variant_mask = (ds['variant_position'] >= start) & (ds['variant_position'] < end)
+        ds = ds.sel(samples=sample_mask.values, variants=variant_mask.values)
         ds = ds.unify_chunks()
         sgkit.save_dataset(ds, output[0].replace(".subset_done", ""), auto_rechunk=True)
         Path(str(output[0])).touch()
