@@ -52,10 +52,16 @@ def load_ancestral_fasta(input, output, wildcards, config, params):
 
     ds_dir = input[1].replace(".vcf_done", "")
     ds = sgkit.load_dataset(ds_dir)
-    ancestral_states = numpy.char.upper(ancestral_sequence[ds['variant_position'].values-1])
-    ancestral_states = xarray.DataArray(data=ancestral_states, dims=["variants"], name="variant_ancestral_allele")
-    ds.update({"variant_ancestral_allele": ancestral_states})
-    sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {"variant_ancestral_allele"}), ds_dir, mode="a")
+    ancestral_states = ancestral_sequence[ds['variant_position'].values-1]
+    ancestral_states_upper = numpy.char.upper(ancestral_states)
+    low_quality_mask = ancestral_states == ancestral_states_upper
+
+    ancestral_states = xarray.DataArray(data=ancestral_states_upper, dims=["variants"], name="variant_ancestral_allele")
+    low_quality_mask = xarray.DataArray(data=low_quality_mask, dims=["variants"], name="variant_low_quality_ancestral_allele_mask")
+    ds.update({"variant_ancestral_allele": ancestral_states,
+               "variant_low_quality_ancestral_allele_mask": low_quality_mask})
+    sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) -
+        {"variant_ancestral_allele", "variant_low_quality_ancestral_allele_mask"}), ds_dir, mode="a")
 
 def pre_subset_filters(input, output, wildcards, config, params):
     import sgkit
@@ -241,7 +247,7 @@ def zarr_stats(input, output, wildcards, config, params):
         )
 
         # Plot site density
-        fig = plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(20, 12))
         ax = fig.add_subplot(111)
         ax.hist(ds.variant_position, bins=200, log=True, histtype='step', label='All Sites')
         for filter_name in config['filters'][wildcards.filter]:
@@ -253,8 +259,13 @@ def zarr_stats(input, output, wildcards, config, params):
                 label=f"variant_mask - {(ds.variant_mask.sum() / ds.dims['variants']).values:.2f}")
         ax.set_title(f'Site density - {wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}')
         ax.set_xlabel('Position')
-        ax.set_ylabel('Number of sites')
-        ax.legend(loc='upper right')
+        ax.set_ylabel('Number of sites passing')
+        box = ax.get_position()
+        ax.set_position([box.x0, box.y0 + box.height * 0.15,
+                         box.width, box.height * 0.85])
+        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1),
+                  fancybox=True, shadow=True, ncol=4)
+        # fig.tight_layout()
         fig.savefig(
             f"{config['data_dir']}/zarr_stats/{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}/site-density.png"
         )

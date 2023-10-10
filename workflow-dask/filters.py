@@ -51,7 +51,9 @@ def low_allele_count(ds, min_derived, min_ancestral):
     # Mask sites that have too few derived or ancestral alleles
     return (ds['variant_ancestral_count'] >= min_ancestral) & (ds['variant_derived_count'] >= min_derived)
 
-
+def low_quality_ancestral_allele(ds):
+    # Mask sites that have a lowercase ancestral allele
+    return ds['variant_low_quality_ancestral_allele_mask']
 
 
 

@@ -78,6 +78,7 @@ filters:
     not_biallelic:
     bad_ancestral:
     no_ancestral_allele:
+    low_quality_ancestral_allele:
     low_allele_count:
         # Note that any change to these params may not be detected by snakemake
         min_derived: 2
