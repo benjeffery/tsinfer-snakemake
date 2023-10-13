@@ -1,9 +1,0 @@
-git+https://github.com/benjeffery/tsinfer.git@1kg
-git+https://github.com/pystatgen/sgkit.git@main
-aiohttp
-cyvcf2
-requests
-yarl
-jupyter
-tskit==0.5.4
-pysam
