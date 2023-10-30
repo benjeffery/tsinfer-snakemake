@@ -42,6 +42,15 @@ rule all:
                 for c in config["truncate"]
             ],
         ),
+        expand(
+            data_dir
+            / "ancestors"
+            / "{subset_name}-{region_name}-{filter}"
+            / "ancestors.png",
+            subset_name=config["sample_subsets"].keys(),
+            region_name=config["regions"].keys(),
+            filter=config["filters"].keys(),
+        ),
 
 
 rule vcf_to_zarrs:
@@ -268,6 +277,24 @@ rule generate_ancestors:
     run:
         steps.generate_ancestors(input, output, wildcards, config, threads)
 
+rule ancestor_stats:
+    input:
+       data_dir
+        / "ancestors"
+        / "{subset_name}-{region_name}-{filter}"
+        / "ancestors.zarr",
+    output:
+        data_dir
+        / "ancestors"
+        / "{subset_name}-{region_name}-{filter}"
+        / "ancestors.png",
+    threads: 1
+    resources:
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        steps.ancestor_stats(input, output, wildcards, config)
 
 rule truncate_ancestors:
     input:

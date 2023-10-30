@@ -457,6 +457,38 @@ def generate_ancestors(input, output, wildcards, config, threads):  # noqa: A002
             ),
         )
 
+def ancestor_stats(input, output, wildcards, config):  # noqa: A002
+    import tsinfer
+    from pathlib import Path
+    import matplotlib.pyplot as plt
+
+    data_dir = Path(config["data_dir"])
+    ancestors = tsinfer.AncestorData.load(input[0])
+
+    time = ancestors.ancestors_time[:]
+    focal_sites = ancestors.ancestors_focal_sites[:]
+    start = ancestors.ancestors_start[:]
+    end = ancestors.ancestors_end[:]
+
+    dpi = 3840 // 16
+    fig, ax = plt.subplots(figsize=(16, 9), dpi=dpi)
+    ax.hlines(time, start, end, color='blue', alpha=0.5, linewidth=.5)
+    # Flatten focal sites and times for scatter plot
+    all_focal_sites = [site for sublist in focal_sites for site in sublist]
+    all_times = [time for time, focal_sites in zip(time, focal_sites) for _
+                 in focal_sites]
+    # Plot the focal sites using rasterization for speed
+    ax.scatter(all_focal_sites, all_times, color='red', s=.5, rasterized=True)
+
+    ax.set_xlabel("Genetic Position")
+    ax.set_ylabel("Time")
+    ax.set_ylim(0, 1)  # Setting y-axis limits to [0, 1]
+    ax.set_title("Ancestral Genetic Sequences")
+
+    # Save the image with 4K resolution
+    plt.tight_layout()
+    plt.savefig(output[0], dpi=dpi)
+    plt.close()
 
 def match_ancestors(
     input, output, wildcards, config, threads, params, slug  # noqa: A002
