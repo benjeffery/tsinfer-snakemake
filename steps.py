@@ -447,7 +447,7 @@ def generate_ancestors(input, output, wildcards, config, threads):  # noqa: A002
         / f"{wildcards.subset_name}-{wildcards.region_name}.log",
         "w",
     ) as log_f:
-        tsinfer.generate_ancestors(
+        ancestors = tsinfer.generate_ancestors(
             sample_data,
             path=output[0],
             genotype_encoding=1,
@@ -456,6 +456,10 @@ def generate_ancestors(input, output, wildcards, config, threads):  # noqa: A002
                 tqdm_kwargs={"file": log_f, "mininterval": 30}
             ),
         )
+    if ancestors.num_ancestors == 0:
+        raise ValueError("No ancestors generated")
+    if ancestors.num_sites == 0:
+        raise ValueError("No sites generated")
 
 
 def match_ancestors(

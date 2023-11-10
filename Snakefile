@@ -361,7 +361,7 @@ rule match_samples:
         / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
         / "performance_report.html",
     # Minimal threads as we're using dask
-    threads: 2
+    threads: 2 if config["match_samples"]["use_dask"] else config["max_threads"]
     resources:
         mem_mb=32000,
         time_min=config["max_time"],
