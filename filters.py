@@ -49,6 +49,7 @@ def not_snps(ds):
         vectorize=True,
         dask="parallelized",
         output_dtypes=[bool],
+        dask_gufunc_kwargs={"allow_rechunk": True},
     )
 
 
