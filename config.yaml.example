@@ -97,11 +97,9 @@ vcf_to_zarr:
   # can take a long time. If you have a fast filesystem you can set this to False
   retain_temp_files: True
 
-# Dask is optional for the following steps, if you're on a single machine set these
+# Dask is optional for the following step, if you're on a single machine set these
 # to False
 match_ancestors:
-  use_dask: True
-match_samples:
   use_dask: True
 
 # Directory to keep output, progress and resume files

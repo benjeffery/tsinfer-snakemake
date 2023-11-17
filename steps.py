@@ -123,6 +123,11 @@ def subset_zarr_vcf(input, output, wildcards, config, params):  # noqa: A002
             sample_ids = numpy.genfromtxt(f, dtype=str)
         sample_ids = xarray.DataArray(sample_ids, dims="sample")
         sample_mask = ds.sample_id.isin(sample_ids)
+        if sample_mask.sum() != len(sample_ids):
+            raise ValueError(
+                f"Could not find all samples in dataset. "
+                f"Failed to find {sample_ids[~sample_mask].values}"
+            )
         variant_mask = (ds["variant_position"] >= start) & (
             ds["variant_position"] < end
         )
@@ -530,30 +535,15 @@ def match_ancestors(
     loop.run_until_complete(run_match_ancestors_with_workers())
 
 
-def match_samples(
-    input, output, wildcards, config, threads, params, slug  # noqa: A002
-):
-    import tsinfer
-    import logging
-    import tskit
-    import numpy
+def build_maps(anc_ts, mismatch, recomb_map):
     import msprime
-    from pathlib import Path
-    import os
-    from dask.distributed import Client
-    from dask.distributed import performance_report
+    import tsinfer
+    import numpy
 
-    logging.basicConfig(level=logging.INFO)
-    data_dir = Path(config["data_dir"])
-    anc_ts = tskit.load(input[0])
-    sample_data = tsinfer.SgkitSampleData(input[1].replace("variant_mask", ""))
-    os.makedirs(data_dir / "progress" / "match_samples", exist_ok=True)
-    os.makedirs(data_dir / "resume" / "match_samples", exist_ok=True)
-    os.makedirs(os.path.dirname(output[0]), exist_ok=True)
-    mismatch = float(wildcards.mismatch)
+    mismatch = float(mismatch)
     if mismatch > 0:
         inference_pos = anc_ts.tables.sites.position
-        rate_map = msprime.RateMap.read_hapmap(input[-1], position_col=1, rate_col=2)
+        rate_map = msprime.RateMap.read_hapmap(recomb_map, position_col=1, rate_col=2)
         genetic_dists = tsinfer.Matcher.recombination_rate_to_dist(
             rate_map, inference_pos
         )
@@ -571,16 +561,57 @@ def match_samples(
     else:
         recombination_map = None
         mismatch_map = None
-    with open(
-        data_dir / "progress" / "match_samples" / f"{slug}.log", "w"
-    ) as log_f, Client(config["scheduler_address"]) as client, performance_report(
-        filename=output[1]
-    ):
-        # Disable dask's aggressive memory management
-        client.amm.stop()
+    return recombination_map, mismatch_map
+
+
+def match_sample_path(input, output, wildcards, config, threads, params):  # noqa: A002
+    import tsinfer
+    import tskit
+    import os
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    anc_ts = tskit.load(input[0])
+    sample_data = tsinfer.SgkitSampleData(input[1].replace("variant_mask", ""))
+    recomb_map = input[-1]
+    os.makedirs(os.path.dirname(output[0]), exist_ok=True)
+    recombination_map, mismatch_map = build_maps(anc_ts, wildcards.mismatch, recomb_map)
+    tsinfer.match_samples_slice_to_disk(
+        sample_data,
+        anc_ts,
+        (int(wildcards.sample_index), int(wildcards.sample_index) + 1),
+        output[0],
+        path_compression=True,
+        recombination=recombination_map,
+        mismatch=mismatch_map,
+        precision=15,
+    )
+
+
+def match_samples(
+    input, output, wildcards, config, threads, params, slug  # noqa: A002
+):
+    import tsinfer
+    import logging
+    import tskit
+    from pathlib import Path
+    import os
+
+    logging.basicConfig(level=logging.INFO)
+    data_dir = Path(config["data_dir"])
+    anc_ts = tskit.load(input[0])
+    recomb_map = input[-1]
+    sample_data = tsinfer.SgkitSampleData(input[1].replace("variant_mask", ""))
+    print(sample_data.num_samples)
+    os.makedirs(data_dir / "progress" / "match_samples", exist_ok=True)
+    os.makedirs(data_dir / "resume" / "match_samples", exist_ok=True)
+    os.makedirs(os.path.dirname(output[0]), exist_ok=True)
+    recombination_map, mismatch_map = build_maps(anc_ts, wildcards.mismatch, recomb_map)
+    with open(data_dir / "progress" / "match_samples" / f"{slug}.log", "w") as log_f:
         ts = tsinfer.match_samples(
             sample_data,
             anc_ts,
+            match_file_pattern=os.path.dirname(input[-2]) + "/*.path",
             path_compression=True,
             num_threads=threads,
             recombination=recombination_map,
@@ -589,10 +620,6 @@ def match_samples(
             progress_monitor=tsinfer.progress.ProgressMonitor(
                 tqdm_kwargs={"file": log_f, "mininterval": 30}
             ),
-            resume_lmdb_file=str(
-                data_dir / "resume" / "match_samples" / f"{slug}.lmdb"
-            ),
-            use_dask=params.use_dask,
             post_process=False,
         )
     ts.dump(output[0])
