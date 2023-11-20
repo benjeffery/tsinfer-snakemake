@@ -337,7 +337,15 @@ rule match_ancestors:
         steps.match_ancestors(input, output, wildcards, config, threads, params, slug)
 
 
-rule match_samples:
+def get_sample_indices(subset_name):
+    import numpy
+
+    with open(config["sample_subsets"][subset_name], "r") as f:
+        # FIXME! We need to know the ploidy here
+        return list(range(len(numpy.genfromtxt(f, dtype=str)) * 2))
+
+
+rule match_sample_paths:
     input:
         data_dir
         / "ancestors"
@@ -353,21 +361,51 @@ rule match_samples:
         ),
     output:
         data_dir
+        / "paths"
+        / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
+        / "sample-{sample_index}.path",
+    threads: 1
+    resources:
+        mem_mb=16000,
+        time_min=60 * 4,
+        runtime=60 * 4,
+    run:
+        steps.match_sample_path(input, output, wildcards, config, threads, params)
+
+
+rule match_samples:
+    input:
+        data_dir
+        / "ancestors"
+        / "{subset_name}-{region_name}-{filter}"
+        / "ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
+        data_dir
+        / "zarr_vcfs_subsets"
+        / "{subset_name}-{region_name}-{filter}"
+        / "data.zarr"
+        / "variant_mask",
+        lambda wildcards: expand(
+            data_dir
+            / "paths"
+            / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
+            / "sample-{sample_index}.path",
+            sample_index=get_sample_indices(wildcards.subset_name),
+            allow_missing=True,
+        ),
+        lambda wildcards: config["recomb_map"].format(
+            chrom=steps.parse_region(config["regions"][wildcards.region_name])[0]
+        ),
+    output:
+        data_dir
         / "trees"
         / "{subset_name}-{region_name}-{filter}"
         / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
-        data_dir
-        / "samples"
-        / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
-        / "performance_report.html",
     # Minimal threads as we're using dask
     threads: 2 if config["match_samples"]["use_dask"] else config["max_threads"]
     resources:
         mem_mb=32000,
         time_min=config["max_time"],
         runtime=config["max_time"],
-    params:
-        use_dask=config["match_samples"]["use_dask"],
     run:
         slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}-mm-{wildcards.mismatch}"
         steps.match_samples(input, output, wildcards, config, threads, params, slug)
