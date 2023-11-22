@@ -83,6 +83,9 @@ filters:
         # Note that any change to these params may not be detected by snakemake
         min_derived: 2
         min_ancestral: 3
+    site_density:
+        window_size: 1000
+        threshold_sites_per_kbp: 100
 
 vcf_to_zarr:
   # These parameters influence the peak RAM usage of the vcf_to_zarr steps
