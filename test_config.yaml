@@ -76,13 +76,17 @@ filters:
     duplicate_position:
     not_snps:
     not_biallelic:
-    bad_ancestral:
-    no_ancestral_allele:
-    low_quality_ancestral_allele:
+# FIXME the fasta for the sample data has too many bad ancestral states
+#    bad_ancestral:
+#    no_ancestral_allele:
+#    low_quality_ancestral_allele:
     low_allele_count:
         # Note that any change to these params may not be detected by snakemake
         min_derived: 2
         min_ancestral: 3
+    site_density:
+        window_size: 1000
+        threshold_sites_per_kbp: 10
 
 vcf_to_zarr:
   # These parameters influence the peak RAM usage of the vcf_to_zarr steps
@@ -121,7 +125,7 @@ dask:
   distributed.scheduler.allowed-failures: 10
   distributed.scheduler.worker-saturation: 1.1
 
-# Cluster config used by the "snakemake-with-dask" script
+# Cluster config used by the "run-snakemake-with-dask-cluster.py" script
 cluster:
 #  class: dask_jobqueue.LSFCluster
 #  kwargs:
@@ -145,7 +149,7 @@ cluster:
   class: dask.distributed.LocalCluster
 
 # Alternatively, specify a dask cluster directly
-# scheduler_address: "tcp://x.x.x.x:xxxxx"
+scheduler_address: "tcp://192.168.1.65:8786"
 
 # Max threads that will be submitted to the cluster/local
 max_threads: 8

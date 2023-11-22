@@ -198,7 +198,10 @@ def post_subset_filters(input, output, wildcards, config, params):  # noqa: A002
         chunks = ds.variant_position.chunks
         filter_config = config["filters"][wildcards.filter]
         for filter_name, filter_kwargs in filter_config.items():
-            if filter_name not in ds.keys():
+            if (
+                f"variant_{filter_name}_mask" not in ds.keys()
+                and filter_name != "site_density"
+            ):
                 mask = getattr(filters, filter_name)(ds, **(filter_kwargs or {}))
                 # Rename to match sgkit convention
                 filter_name = f"variant_{filter_name}_mask"
@@ -208,12 +211,84 @@ def post_subset_filters(input, output, wildcards, config, params):  # noqa: A002
                     ds.drop_vars(set(ds.data_vars) - {filter_name}), ds_dir, mode="a"
                 )
 
-        mask = xarray.full_like(ds["variant_position"], True, dtype=bool)
+        # Site density needs to be run after all other filters
+        if "site_density" in filter_config:
+            # First create a site mask based on all the other filters
+            all_positions = ds["variant_position"].values
+            all_filters_mask = numpy.full_like(all_positions, True, dtype=bool)
+            for filter_name in set(filter_config) - {"site_density"}:
+                filter_name = f"variant_{filter_name}_mask"
+                all_filters_mask &= ds[filter_name].values
+
+            # Make an array of positions of used sites
+            used_sites_positions = all_positions[all_filters_mask]
+
+            # Retrieve some config
+            window_size = filter_config["site_density"]["window_size"]
+            count_threshold = (
+                filter_config["site_density"]["threshold_sites_per_kbp"] / 1000
+            ) * window_size
+
+            # Create a boolean array covering each base between the start and end of all
+            # the sites, marking bases with sites as True
+            first_site = all_positions[0]
+            last_site = all_positions[-1]
+            bool_array = numpy.zeros(last_site - first_site, dtype=bool)
+            bool_array[used_sites_positions - first_site] = True
+
+            # Convolve the boolean array with a window of size window_size to get the
+            # number of sites in each sliding window
+            window = numpy.ones(window_size)
+            used_sites_count = numpy.convolve(bool_array, window, mode="valid")
+
+            site_density_mask = numpy.full_like(
+                ds["variant_position"], True, dtype=bool
+            )
+            # If none of the sites are above the threshold, mask all sites
+            # we have to do this as argmax returns 0 if there are no True values
+            if not numpy.any(used_sites_count >= count_threshold):
+                site_density_mask[:] = False
+            else:
+                # Find the start of the window where the count goes over the threshold
+                # from the left
+                start = numpy.argmax(used_sites_count >= count_threshold)
+
+                # Find the start of the window where the count goes over the threshold
+                # from the right
+                end = (
+                    len(used_sites_count)
+                    - 1
+                    - numpy.argmax(used_sites_count[::-1] >= count_threshold)
+                )
+
+                # These values are relative to the start of the sites, so we need
+                # to add the first site position to get the absolute position
+                start += first_site
+                end += first_site
+
+                # Find the index of start and end positions
+                start = numpy.argmax(all_positions >= start)
+                end = numpy.argmax(all_positions >= end)
+                site_density_mask[:start] = False
+                site_density_mask[end:] = False
+
+            site_density_mask = xarray.DataArray(
+                site_density_mask, dims=["variants"], name="variant_site_density_mask"
+            )
+            site_density_mask = site_density_mask.chunk(chunks).compute()
+            ds.update({"variant_site_density_mask": site_density_mask})
+            sgkit.save_dataset(
+                ds.drop_vars(set(ds.data_vars) - {"variant_site_density_mask"}),
+                ds_dir,
+                mode="a",
+            )
+
+        final_mask = xarray.full_like(ds["variant_position"], True, dtype=bool)
         for filter_name in filter_config:
             filter_name = f"variant_{filter_name}_mask"
-            mask &= ds[filter_name]
-        mask = mask.rename("variant_mask").chunk(chunks).compute()
-        ds.update({"variant_mask": mask})
+            final_mask &= ds[filter_name]
+        final_mask = final_mask.rename("variant_mask").chunk(chunks).compute()
+        ds.update({"variant_mask": final_mask})
         sgkit.save_dataset(
             ds.drop_vars(set(ds.data_vars) - {"variant_mask"}), ds_dir, mode="a"
         )
@@ -223,6 +298,7 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     import sgkit
     import json
     import os
+    import numpy
     from dask.distributed import Client
     import matplotlib.pyplot as plt
 
@@ -328,33 +404,43 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
         # Plot site density
         fig = plt.figure(figsize=(20, 12))
         ax = fig.add_subplot(111)
-        ax.hist(
-            ds.variant_position, bins=200, log=True, histtype="step", label="All Sites"
-        )
+
+        # First, get the total counts in each bin for all sites
+        counts_all, bins = numpy.histogram(ds.variant_position, bins=200)
+        counts_all = counts_all.astype(float)
+        counts_all[counts_all == 0] = numpy.nan
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+
+        # Plot for each filter
         for filter_name in config["filters"][wildcards.filter]:
             mask = ds[f"variant_{filter_name}_mask"].values
-            ax.hist(
-                ds.variant_position[mask],
-                bins=200,
-                log=True,
-                histtype="step",
+            counts_filter, _ = numpy.histogram(ds.variant_position[mask], bins=bins)
+            fraction = counts_filter / counts_all
+            ax.plot(
+                bin_centers,
+                fraction,
                 label=f"{filter_name} - {mask.sum()/ds.dims['variants']:.2f}",
             )
 
-        ax.hist(
-            ds.variant_position[ds.variant_mask.values],
-            bins=200,
-            log=True,
-            histtype="step",
+        # Also plot for the final variant mask
+        counts_final_mask, _ = numpy.histogram(
+            ds.variant_position[ds.variant_mask.values], bins=bins
+        )
+        fraction_final_mask = counts_final_mask / counts_all
+        ax.plot(
+            bin_centers,
+            fraction_final_mask,
             label=f"variant_mask - "
             f"{(ds.variant_mask.sum() / ds.dims['variants']).values:.2f}",
         )
+
         ax.set_title(
-            f"Site density - "
+            f"Filters passing fraction - "
             f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}"
         )
         ax.set_xlabel("Position")
-        ax.set_ylabel("Number of sites passing")
+        ax.set_ylabel("Fraction of sites passing")
+        # Put the legend outside the plot
         box = ax.get_position()
         ax.set_position(
             [box.x0, box.y0 + box.height * 0.15, box.width, box.height * 0.85]
@@ -367,6 +453,63 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
             ncol=4,
         )
         # fig.tight_layout()
+        fig.savefig(
+            f"{config['data_dir']}/zarr_stats/"
+            f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}/"
+            f"filter-fractions.png"
+        )
+
+        filter_config = config["filters"][wildcards.filter]
+        # Plot raw site density after all filters, but before the site_density filter
+        # to inform threshold choices
+        other_filters_mask = numpy.full_like(ds["variant_position"], True, dtype=bool)
+        for filter_name in set(filter_config) - {"site_density"}:
+            filter_name = f"variant_{filter_name}_mask"
+            other_filters_mask &= ds[filter_name].values
+
+        all_sites = ds.variant_position.values
+        filtered_sites = all_sites[other_filters_mask]
+        fig = plt.figure(figsize=(20, 12))
+        ax = fig.add_subplot(111)
+        # Calculate the bin edges
+        bin_width = 1000
+        min_edge = all_sites.min() - (all_sites.min() % bin_width)
+        max_edge = all_sites.max() + (bin_width - all_sites.max() % bin_width)
+        bins = numpy.arange(min_edge, max_edge + bin_width, bin_width)
+        ax.hist(all_sites, bins=bins, label="All sites", histtype="step")
+        ax.hist(
+            filtered_sites,
+            bins=bins,
+            label=f"Passing sites{'(not including site_density filter)' if 'site_density' in filter_config else ''}",
+            histtype="step",
+        )
+
+        # If site_density is in the filter config, plot the threshold
+        if "site_density" in filter_config:
+            # Plot the threshold
+            threshold = filter_config["site_density"]["threshold_sites_per_kbp"]
+            ax.axhline(
+                threshold,
+                color="red",
+                label=f"Site density threshold ({threshold:.2f} sites/kbp)",
+            )
+        ax.set_title(
+            f"Site density - "
+            f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}"
+        )
+        ax.set_xlabel("Position")
+        ax.set_ylabel("Number of sites per kb")
+        # Put the legend outside the plot
+        box = ax.get_position()
+        ax.set_position(
+            [box.x0, box.y0 + box.height * 0.15, box.width, box.height * 0.85]
+        )
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.1),
+            fancybox=True,
+            shadow=True,
+        )
         fig.savefig(
             f"{config['data_dir']}/zarr_stats/"
             f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}/"
