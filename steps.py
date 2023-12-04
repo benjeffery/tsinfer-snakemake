@@ -137,6 +137,23 @@ def subset_zarr_vcf(input, output, wildcards, config, params):  # noqa: A002
         Path(str(output[0])).touch()
 
 
+def sliding_window_density(mask, positions, window_size):
+    import numpy
+
+    # Make an array of positions of used sites
+    used_sites_positions = positions[mask]
+    # Create a boolean array covering each base between the start and end of all
+    # the sites, marking bases with sites as True
+    first_site = positions[0]
+    last_site = positions[-1]
+    bool_array = numpy.zeros(last_site - first_site + 1, dtype=bool)
+    bool_array[used_sites_positions - first_site] = True
+    # Convolve the boolean array with a window of size window_size to get the
+    # number of sites in each sliding window
+    window = numpy.ones(window_size)
+    used_sites_count = numpy.convolve(bool_array, window, mode="valid")
+    return used_sites_count
+
 def post_subset_filters(input, output, wildcards, config, params):  # noqa: A002
     import numpy
     import sgkit
@@ -197,19 +214,25 @@ def post_subset_filters(input, output, wildcards, config, params):  # noqa: A002
         # (note could use dask better here by combining filters into one call)
         chunks = ds.variant_position.chunks
         filter_config = config["filters"][wildcards.filter]
-        for filter_name, filter_kwargs in filter_config.items():
-            if (
-                f"variant_{filter_name}_mask" not in ds.keys()
-                and filter_name != "site_density"
-            ):
-                mask = getattr(filters, filter_name)(ds, **(filter_kwargs or {}))
-                # Rename to match sgkit convention
-                filter_name = f"variant_{filter_name}_mask"
-                mask = mask.rename(filter_name).chunk(chunks).compute()
-                ds.update({filter_name: mask})
-                sgkit.save_dataset(
-                    ds.drop_vars(set(ds.data_vars) - {filter_name}), ds_dir, mode="a"
-                )
+        # OPen a file for logging
+        with open("/home/bjeffery/log", "w") as f:
+            for filter_name, filter_kwargs in filter_config.items():
+                f.write(f"Running filter {filter_name}\n")
+                f.write(f"Filter kwargs {filter_kwargs}\n")
+                if (
+                    f"variant_{filter_name}_mask" not in ds.keys()
+                    and filter_name != "site_density"
+                ):
+                    f.write(f"Running inner filter {filter_name}\n")
+                    mask = getattr(filters, filter_name)(ds, **(filter_kwargs or {}))
+                    # Rename to match sgkit convention
+                    filter_name = f"variant_{filter_name}_mask"
+                    mask = mask.rename(filter_name).chunk(chunks).compute()
+                    ds.update({filter_name: mask})
+                    f.write(f"Saving filter {filter_name} to {ds_dir}\n")
+                    sgkit.save_dataset(
+                        ds.drop_vars(set(ds.data_vars) - {filter_name}), ds_dir, mode="a"
+                    )
 
         # Site density needs to be run after all other filters
         if "site_density" in filter_config:
@@ -220,26 +243,13 @@ def post_subset_filters(input, output, wildcards, config, params):  # noqa: A002
                 filter_name = f"variant_{filter_name}_mask"
                 all_filters_mask &= ds[filter_name].values
 
-            # Make an array of positions of used sites
-            used_sites_positions = all_positions[all_filters_mask]
-
             # Retrieve some config
             window_size = filter_config["site_density"]["window_size"]
             count_threshold = (
                 filter_config["site_density"]["threshold_sites_per_kbp"] / 1000
             ) * window_size
 
-            # Create a boolean array covering each base between the start and end of all
-            # the sites, marking bases with sites as True
-            first_site = all_positions[0]
-            last_site = all_positions[-1]
-            bool_array = numpy.zeros(last_site - first_site, dtype=bool)
-            bool_array[used_sites_positions - first_site] = True
-
-            # Convolve the boolean array with a window of size window_size to get the
-            # number of sites in each sliding window
-            window = numpy.ones(window_size)
-            used_sites_count = numpy.convolve(bool_array, window, mode="valid")
+            used_sites_count = sliding_window_density(all_filters_mask, all_positions, window_size)
 
             site_density_mask = numpy.full_like(
                 ds["variant_position"], True, dtype=bool
@@ -263,6 +273,7 @@ def post_subset_filters(input, output, wildcards, config, params):  # noqa: A002
 
                 # These values are relative to the start of the sites, so we need
                 # to add the first site position to get the absolute position
+                first_site = all_positions[0]
                 start += first_site
                 end += first_site
 
@@ -292,7 +303,6 @@ def post_subset_filters(input, output, wildcards, config, params):  # noqa: A002
         sgkit.save_dataset(
             ds.drop_vars(set(ds.data_vars) - {"variant_mask"}), ds_dir, mode="a"
         )
-
 
 def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     import sgkit
@@ -471,18 +481,16 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
         filtered_sites = all_sites[other_filters_mask]
         fig = plt.figure(figsize=(20, 12))
         ax = fig.add_subplot(111)
-        # Calculate the bin edges
-        bin_width = 1000
-        min_edge = all_sites.min() - (all_sites.min() % bin_width)
-        max_edge = all_sites.max() + (bin_width - all_sites.max() % bin_width)
-        bins = numpy.arange(min_edge, max_edge + bin_width, bin_width)
-        ax.hist(all_sites, bins=bins, label="All sites", histtype="step")
-        ax.hist(
-            filtered_sites,
-            bins=bins,
-            label=f"Passing sites{'(not including site_density filter)' if 'site_density' in filter_config else ''}",
-            histtype="step",
-        )
+
+        try:
+            window_size = filter_config["site_density"]["window_size"]
+        except KeyError:
+            # Default to a sensible value
+            window_size = 1000
+        all_sites_count = sliding_window_density(numpy.full_like(all_sites, True, dtype=bool), all_sites, window_size)
+        ax.plot(numpy.arange(all_sites[0], all_sites[-1]-window_size+2), (all_sites_count/window_size)*1000, label="All sites")
+        filtered_sites_count = sliding_window_density(other_filters_mask, all_sites, window_size)
+        ax.plot(numpy.arange(all_sites[0], all_sites[-1]-window_size+2), (filtered_sites_count/window_size)*1000, label=f"Passing sites{'(not including site_density filter)' if 'site_density' in filter_config else ''}")
 
         # If site_density is in the filter config, plot the threshold
         if "site_density" in filter_config:
@@ -494,7 +502,7 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
                 label=f"Site density threshold ({threshold:.2f} sites/kbp)",
             )
         ax.set_title(
-            f"Site density - "
+            f"Site density ({window_size} bp sliding window) - "
             f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}"
         )
         ax.set_xlabel("Position")
