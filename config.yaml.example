@@ -122,6 +122,7 @@ sample_subsets:
 dask:
   distributed.scheduler.allowed-failures: 10
   distributed.scheduler.worker-saturation: 1.1
+  temporary_directory': /path/to/tmp
 
 # Cluster config used by the "snakemake-with-dask" script
 cluster:
