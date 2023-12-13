@@ -105,6 +105,10 @@ vcf_to_zarr:
 match_ancestors:
   use_dask: True
 
+match_samples:
+  slice_size: 10
+
+
 # Directory to keep output, progress and resume files
 data_dir: "data/workflow"
 
