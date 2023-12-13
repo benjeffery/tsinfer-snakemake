@@ -107,6 +107,7 @@ match_ancestors:
   use_dask: True
 match_samples:
   use_dask: True
+  slice_size: 10
 
 # Directory to keep output, progress and resume files
 data_dir: "test_data/workflow"

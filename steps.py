@@ -215,24 +215,19 @@ def post_subset_filters(input, output, wildcards, config, params):  # noqa: A002
         chunks = ds.variant_position.chunks
         filter_config = config["filters"][wildcards.filter]
         # OPen a file for logging
-        with open("/home/bjeffery/log", "w") as f:
-            for filter_name, filter_kwargs in filter_config.items():
-                f.write(f"Running filter {filter_name}\n")
-                f.write(f"Filter kwargs {filter_kwargs}\n")
-                if (
-                    f"variant_{filter_name}_mask" not in ds.keys()
-                    and filter_name != "site_density"
-                ):
-                    f.write(f"Running inner filter {filter_name}\n")
-                    mask = getattr(filters, filter_name)(ds, **(filter_kwargs or {}))
-                    # Rename to match sgkit convention
-                    filter_name = f"variant_{filter_name}_mask"
-                    mask = mask.rename(filter_name).chunk(chunks).compute()
-                    ds.update({filter_name: mask})
-                    f.write(f"Saving filter {filter_name} to {ds_dir}\n")
-                    sgkit.save_dataset(
-                        ds.drop_vars(set(ds.data_vars) - {filter_name}), ds_dir, mode="a"
-                    )
+        for filter_name, filter_kwargs in filter_config.items():
+            if (
+                f"variant_{filter_name}_mask" not in ds.keys()
+                and filter_name != "site_density"
+            ):
+                mask = getattr(filters, filter_name)(ds, **(filter_kwargs or {}))
+                # Rename to match sgkit convention
+                filter_name = f"variant_{filter_name}_mask"
+                mask = mask.rename(filter_name).chunk(chunks).compute()
+                ds.update({filter_name: mask})
+                sgkit.save_dataset(
+                    ds.drop_vars(set(ds.data_vars) - {filter_name}), ds_dir, mode="a"
+                )
 
         # Site density needs to be run after all other filters
         if "site_density" in filter_config:
@@ -730,7 +725,7 @@ def match_sample_path(input, output, wildcards, config, threads, params):  # noq
     tsinfer.match_samples_slice_to_disk(
         sample_data,
         anc_ts,
-        (int(wildcards.sample_index), int(wildcards.sample_index) + 1),
+        (int(wildcards.sample_index_start), int(wildcards.sample_index_end) + 1),
         output[0],
         path_compression=True,
         recombination=recombination_map,

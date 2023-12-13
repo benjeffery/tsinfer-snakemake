@@ -337,12 +337,17 @@ rule match_ancestors:
         steps.match_ancestors(input, output, wildcards, config, threads, params, slug)
 
 
-def get_sample_indices(subset_name):
+def get_sample_slices(subset_name):
     import numpy
 
     with open(config["sample_subsets"][subset_name], "r") as f:
         # FIXME! We need to know the ploidy here
-        return list(range(len(numpy.genfromtxt(f, dtype=str)) * 2))
+        num_samples = len(numpy.genfromtxt(f, dtype=str)) * 2
+        # Generate starts and ends for each chunk, of size config["match_samples"]["slice_size"]
+        return [
+            (i, min(i + config["match_samples"]["slice_size"]-1, num_samples-1))
+            for i in range(0, num_samples, config["match_samples"]["slice_size"])
+        ]
 
 
 rule match_sample_paths:
@@ -363,7 +368,7 @@ rule match_sample_paths:
         data_dir
         / "paths"
         / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
-        / "sample-{sample_index}.path",
+        / "sample-{sample_index_start}-{sample_index_end}.path",
     threads: 1
     resources:
         mem_mb=16000,
@@ -388,8 +393,8 @@ rule match_samples:
             data_dir
             / "paths"
             / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
-            / "sample-{sample_index}.path",
-            sample_index=get_sample_indices(wildcards.subset_name),
+            / "sample-{sample_slice[0]}-{sample_slice[1]}.path",
+            sample_slice=get_sample_slices(wildcards.subset_name),
             allow_missing=True,
         ),
         lambda wildcards: config["recomb_map"].format(
