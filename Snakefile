@@ -102,7 +102,7 @@ rule pre_subset_filters:
             / "zarr_vcfs"
             / "chr{chrom_num}"
             / "data.zarr"
-            / "variant_duplicate_position_mask"
+            / "variant_not_snps_mask"
         ),
         directory(
             data_dir
@@ -117,6 +117,20 @@ rule pre_subset_filters:
             / "chr{chrom_num}"
             / "data.zarr"
             / "variant_no_ancestral_allele_mask"
+        ),
+        directory(
+            data_dir
+            / "zarr_vcfs"
+            / "chr{chrom_num}"
+            / "data.zarr"
+            / "variant_not_biallelic_mask"
+        ),
+        directory(
+            data_dir
+            / "zarr_vcfs"
+            / "chr{chrom_num}"
+            / "data.zarr"
+            / "variant_duplicate_position_mask"
         ),
     resources:
         mem_mb=16000,
@@ -139,9 +153,11 @@ rule subset_zarr_vcf:
             for suffix in [
                 ".vcf_done",
                 "variant_ancestral_allele",
-                "variant_duplicate_position_mask",
+                "variant_not_snps_mask",
                 "variant_bad_ancestral_mask",
                 "variant_no_ancestral_allele_mask",
+                "variant_not_biallelic_mask",
+                "variant_duplicate_position_mask",
             ]
         ],
         lambda wildcards: config["sample_subsets"][wildcards.subset_name],
@@ -400,8 +416,7 @@ rule match_samples:
         / "trees"
         / "{subset_name}-{region_name}-{filter}"
         / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
-    # Minimal threads as we're using dask
-    threads: 2 if config["match_samples"]["use_dask"] else config["max_threads"]
+    threads: 2
     resources:
         mem_mb=32000,
         time_min=config["max_time"],
