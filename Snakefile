@@ -20,22 +20,25 @@ localrules:
     all,
     summary_table,
 
+def ds_dir(wildcards):
+    return data_dir / "zarr_vcfs" / f"chr{steps.parse_region(config['regions'][wildcards.region_name])[0]}" / "data.zarr"
+
 
 rule all:
     input:
         expand(
-            data_dir / "{subset_name}-{filter}-region_summary_table.csv",
+            data_dir / "{subset_name}-{filter_set}-region_summary_table.csv",
             subset_name=config["sample_subsets"].keys(),
-            filter=config["filters"].keys(),
+            filter_set=config["filters"].keys(),
         ),
         expand(
             data_dir
             / "trees"
-            / "{subset_name}-{region_name}-{filter}"
-            / "{subset_name}-{region_name}-{filter}-truncate-{truncation}-mm{mismatch}-post-processed.trees",
+            / "{subset_name}-{region_name}-{filter_set}"
+            / "{subset_name}-{region_name}-{filter_set}-truncate-{truncation}-mm{mismatch}-post-processed.trees",
             subset_name=config["sample_subsets"].keys(),
             region_name=config["regions"].keys(),
-            filter=config["filters"].keys(),
+            filter_set=config["filters"].keys(),
             mismatch=config["mismatch_values"],
             truncation=[
                 f"{c['lower']}-{c['upper']}-{c['multiplier']}"
@@ -79,6 +82,13 @@ rule load_ancestral_fasta:
             / "data.zarr"
             / "variant_ancestral_allele"
         ),
+        directory(
+            data_dir
+            / "zarr_vcfs"
+            / "chr{chrom_num}"
+            / "data.zarr"
+            / "variant_low_quality_ancestral_allele_mask"
+        ),
     threads: 1
     resources:
         mem_mb=16000,
@@ -96,7 +106,33 @@ rule pre_subset_filters:
         / "chr{chrom_num}"
         / "data.zarr"
         / "variant_ancestral_allele",
+        data_dir
+        / "zarr_vcfs"
+        / "chr{chrom_num}"
+        / "data.zarr"
+        / "variant_low_quality_ancestral_allele_mask",
     output:
+        directory(
+            data_dir
+            / "zarr_vcfs"
+            / "chr{chrom_num}"
+            / "data.zarr"
+            / "variant_bad_ancestral_mask"
+        ),
+        directory(
+                data_dir
+                / "zarr_vcfs"
+                / "chr{chrom_num}"
+                / "data.zarr"
+                / "variant_no_ancestral_allele_mask"
+        ),
+        directory(
+                data_dir
+                / "zarr_vcfs"
+                / "chr{chrom_num}"
+                / "data.zarr"
+                / "variant_not_biallelic_mask"
+        ),
         directory(
             data_dir
             / "zarr_vcfs"
@@ -109,15 +145,9 @@ rule pre_subset_filters:
             / "zarr_vcfs"
             / "chr{chrom_num}"
             / "data.zarr"
-            / "variant_bad_ancestral_mask"
+            / "variant_not_snps_mask"
         ),
-        directory(
-            data_dir
-            / "zarr_vcfs"
-            / "chr{chrom_num}"
-            / "data.zarr"
-            / "variant_no_ancestral_allele_mask"
-        ),
+
     resources:
         mem_mb=16000,
         time_min=4 * 60,
@@ -125,78 +155,126 @@ rule pre_subset_filters:
     run:
         steps.pre_subset_filters(input, output, wildcards, config, params)
 
-
-rule subset_zarr_vcf:
+rule region_mask:
     input:
-        lambda wildcards: [
-            (
-                data_dir
-                / "zarr_vcfs"
-                / f"chr{steps.parse_region(config['regions'][wildcards.region_name])[0]}"
-                / "data.zarr"
-                / suffix
-            )
-            for suffix in [
-                ".vcf_done",
-                "variant_ancestral_allele",
-                "variant_duplicate_position_mask",
-                "variant_bad_ancestral_mask",
-                "variant_no_ancestral_allele_mask",
-            ]
-        ],
-        lambda wildcards: config["sample_subsets"][wildcards.subset_name],
-    output:
-        data_dir
-        / "zarr_vcfs_subsets"
-        / "{subset_name}-{region_name}-{filter}"
-        / "data.zarr"
-        / ".subset_done",
-    resources:
-        dask_cluster=5,
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
-    run:
-        steps.subset_zarr_vcf(input, output, wildcards, config, params)
-        # We have to do this as snakemake doesn't like subsequent outputs that are children of this one
-        Path(output[0]).touch()
-
-
-rule post_subset_filters:
-    input:
-        data_dir
-        / "zarr_vcfs_subsets"
-        / "{subset_name}-{region_name}-{filter}"
-        / "data.zarr"
-        / ".subset_done",
+        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done"
     output:
         directory(
             data_dir
-            / "zarr_vcfs_subsets"
-            / "{subset_name}-{region_name}-{filter}"
+            / "zarr_vcfs"
+            / "chr{chrom_num}"
             / "data.zarr"
-            / "variant_mask"
+            / "variant_{region_name}_region_mask"
         ),
     resources:
-        dask_cluster=5,
         mem_mb=16000,
         time_min=4 * 60,
         runtime=4 * 60,
     run:
-        steps.post_subset_filters(input, output, wildcards, config, params)
+        steps.region_mask(input, output, wildcards, config, params)
+
+rule sample_mask:
+    input:
+        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done",
+        lambda wildcards: config["sample_subsets"][wildcards.subset_name],
+    output:
+        directory(
+            data_dir
+            / "zarr_vcfs"
+            / "chr{chrom_num}"
+            / "data.zarr"
+            / "sample_{subset_name}_subset_mask"
+        ),
+    resources:
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        steps.sample_mask(input, output, wildcards, config, params)
+
+rule allele_counts:
+    input:
+        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done",
+        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / "sample_{subset_name}_subset_mask",
+    output:
+        directory(
+            data_dir
+            / "zarr_vcfs"
+            / "chr{chrom_num}"
+            / "data.zarr"
+            / "variant_{subset_name}_subset_ref_count"
+        ),
+        directory(
+                data_dir
+                / "zarr_vcfs"
+                / "chr{chrom_num}"
+                / "data.zarr"
+                / "variant_{subset_name}_subset_ancestral_count"
+        ),
+        directory(
+                data_dir
+                / "zarr_vcfs"
+                / "chr{chrom_num}"
+                / "data.zarr"
+                / "variant_{subset_name}_subset_missing_count"
+        ),
+        directory(
+                data_dir
+                / "zarr_vcfs"
+                / "chr{chrom_num}"
+                / "data.zarr"
+                / "variant_{subset_name}_subset_derived_count"
+        ),
+    resources:
+        dask_cluster=10,
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        steps.allele_counts(input, output, wildcards, config, params)
+
+rule subset_filters:
+    input:
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: expand( ds_dir(wildcards) / "{array_name}",
+            array_name=[
+                "variant_bad_ancestral_mask",
+                "variant_no_ancestral_allele_mask",
+                "variant_not_biallelic_mask",
+                "variant_duplicate_position_mask",
+                "variant_not_snps_mask",
+                "variant_low_quality_ancestral_allele_mask",
+                "variant_{subset_name}_subset_ref_count",
+                "variant_{subset_name}_subset_ancestral_count",
+                "variant_{subset_name}_subset_missing_count",
+                "variant_{subset_name}_subset_derived_count",
+                "variant_{region_name}_region_mask",
+                "sample_{subset_name}_subset_mask",
+            ],
+        ),
+    output:
+        directory(
+            data_dir
+            / "zarr_vcfs"
+            / "chr{chrom_num}"
+            / "data.zarr"
+            / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask"
+        ),
+    resources:
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        steps.subset_filters(input, output, wildcards, config, params)
 
 
 rule zarr_stats:
     input:
-        data_dir
-        / "zarr_vcfs_subsets"
-        / "{subset_name}-{region_name}-{filter}"
-        / "data.zarr"
-        / "variant_mask",
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards) / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask",
     output:
-        data_dir / "zarr_stats" / "{subset_name}-{region_name}-{filter}" / "stats.json",
+        data_dir / "zarr_stats" / "{subset_name}-{region_name}-{filter_set}" / "stats.json",
     resources:
-        dask_cluster=5,
         mem_mb=16000,
         time_min=4 * 60,
         runtime=4 * 60,
@@ -209,12 +287,12 @@ checkpoint summary_table:
         lambda wildcards: [
             data_dir
             / "zarr_stats"
-            / f"{wildcards.subset_name}-{region_name}-{wildcards.filter}"
+            / f"{wildcards.subset_name}-{region_name}-{wildcards.filter_set}"
             / "stats.json"
             for region_name in config["regions"].keys()
         ],
     output:
-        data_dir / "{subset_name}-{filter}-region_summary_table.csv",
+        data_dir / "{subset_name}-{filter_set}-region_summary_table.csv",
     run:
         steps.summary_table(input, output, wildcards, config, params)
 
@@ -225,12 +303,12 @@ def get_ancestor_gen_memory(wildcards):
 
     # Use the checkpoint to check the stats file exists
     checkpoint_output = checkpoints.summary_table.get(
-        subset_name=wildcards.subset_name, filter=wildcards.filter
+        subset_name=wildcards.subset_name, filter_set=wildcards.filter_set
     )
     region_stats = (
         data_dir
         / "zarr_stats"
-        / f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}"
+        / f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter_set}"
         / "stats.json"
     )
     with open(region_stats, "r") as json_stats_f:
@@ -240,25 +318,22 @@ def get_ancestor_gen_memory(wildcards):
         n_ploidy = stats["n_ploidy"]
         n_sites = stats["n_variants"]
         n_masked = stats["sites_masked"]
-        ac1 = sum([ac == 1 for ac in stats["allele_counts"]])
         mem = 16_000 + int(
-            (((n_sites - n_masked) - ac1) * n_samples * n_ploidy) / (8 * 1_048_576)
+            ((n_sites - n_masked)  * n_samples * n_ploidy) / (8 * 1_048_576)
         )
         return mem
 
 
 rule generate_ancestors:
     input:
-        data_dir
-        / "zarr_vcfs_subsets"
-        / "{subset_name}-{region_name}-{filter}"
-        / "data.zarr"
-        / "variant_mask",
-        data_dir / "zarr_stats" / "{subset_name}-{region_name}-{filter}" / "stats.json",
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards) / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask",
+        lambda wildcards: ds_dir(wildcards) / "sample_{subset_name}_subset_mask",
+        data_dir / "zarr_stats" / "{subset_name}-{region_name}-{filter_set}" / "stats.json",
     output:
         data_dir
         / "ancestors"
-        / "{subset_name}-{region_name}-{filter}"
+        / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors.zarr",
     threads: config["max_threads"]
     resources:
@@ -273,12 +348,12 @@ rule truncate_ancestors:
     input:
         data_dir
         / "ancestors"
-        / "{subset_name}-{region_name}-{filter}"
+        / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors.zarr",
     output:
         data_dir
         / "ancestors"
-        / "{subset_name}-{region_name}-{filter}"
+        / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}.zarr",
     threads: 1
     resources:
@@ -309,21 +384,19 @@ rule match_ancestors:
     input:
         data_dir
         / "ancestors"
-        / "{subset_name}-{region_name}-{filter}"
+        / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}.zarr",
-        data_dir
-        / "zarr_vcfs_subsets"
-        / "{subset_name}-{region_name}-{filter}"
-        / "data.zarr"
-        / "variant_mask",
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards) / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask",
+        lambda wildcards: ds_dir(wildcards) / "sample_{subset_name}_subset_mask",
     output:
         data_dir
         / "ancestors"
-        / "{subset_name}-{region_name}-{filter}"
+        / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
         data_dir
         / "ancestors"
-        / "{subset_name}-{region_name}-{filter}"
+        / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}-performance_report.html",
     threads: config["max_threads"]
     resources:
@@ -333,7 +406,7 @@ rule match_ancestors:
     params:
         use_dask=config["match_ancestors"]["use_dask"],
     run:
-        slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
+        slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter_set}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
         steps.match_ancestors(input, output, wildcards, config, threads, params, slug)
 
 
@@ -354,20 +427,18 @@ rule match_sample_paths:
     input:
         data_dir
         / "ancestors"
-        / "{subset_name}-{region_name}-{filter}"
+        / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
-        data_dir
-        / "zarr_vcfs_subsets"
-        / "{subset_name}-{region_name}-{filter}"
-        / "data.zarr"
-        / "variant_mask",
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards) / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask",
+        lambda wildcards: ds_dir(wildcards) / "sample_{subset_name}_subset_mask",
         lambda wildcards: config["recomb_map"].format(
             chrom=steps.parse_region(config["regions"][wildcards.region_name])[0]
         ),
     output:
         data_dir
         / "paths"
-        / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
         / "sample-{sample_index_start}-{sample_index_end}.path",
     threads: 1
     resources:
@@ -382,17 +453,15 @@ rule match_samples:
     input:
         data_dir
         / "ancestors"
-        / "{subset_name}-{region_name}-{filter}"
+        / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
-        data_dir
-        / "zarr_vcfs_subsets"
-        / "{subset_name}-{region_name}-{filter}"
-        / "data.zarr"
-        / "variant_mask",
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards) / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask",
+        lambda wildcards: ds_dir(wildcards) / "sample_{subset_name}_subset_mask",
         lambda wildcards: expand(
             data_dir
             / "paths"
-            / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
+            / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
             / "sample-{sample_slice[0]}-{sample_slice[1]}.path",
             sample_slice=get_sample_slices(wildcards.subset_name),
             allow_missing=True,
@@ -403,8 +472,8 @@ rule match_samples:
     output:
         data_dir
         / "trees"
-        / "{subset_name}-{region_name}-{filter}"
-        / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
     # Minimal threads as we're using dask
     threads: 2 if config["match_samples"]["use_dask"] else config["max_threads"]
     resources:
@@ -412,7 +481,7 @@ rule match_samples:
         time_min=config["max_time"],
         runtime=config["max_time"],
     run:
-        slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}-mm-{wildcards.mismatch}"
+        slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter_set}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}-mm-{wildcards.mismatch}"
         steps.match_samples(input, output, wildcards, config, threads, params, slug)
 
 
@@ -420,13 +489,13 @@ rule post_process:
     input:
         data_dir
         / "trees"
-        / "{subset_name}-{region_name}-{filter}"
-        / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
     output:
         data_dir
         / "trees"
-        / "{subset_name}-{region_name}-{filter}"
-        / "{subset_name}-{region_name}-{filter}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed.trees",
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed.trees",
     # Post process is currently not done in parallel
     threads: 2
     resources:

@@ -69,10 +69,11 @@ truncate:
 
 # Pre-tsinfer filters. Each entry is a named filter set that will be run.
 # Any of the filters defined in filters.py can be referenced here.
+# Key names should not contain underscores or hyphens
 filters:
-  filter_minimal:
+  filterMinimal:
     duplicate_position:
-  filter_nton23:
+  filterNton23:
     duplicate_position:
     not_snps:
     not_biallelic:
@@ -118,8 +119,9 @@ temp_dir: "test_data/workflow/temp"
 # A dict of subsets to run
 # Key names will be used in the output file names, the referenced file should
 # be a CSV with a single, header-less column containing the sample IDs to include.
+# Key names should not contain underscores or hyphens
 sample_subsets:
-  subset: "test_data/subset_samples.csv"
+  subsetName: "test_data/subset_samples.csv"
 
 # Place dask config here
 dask:
