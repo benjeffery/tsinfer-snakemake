@@ -83,6 +83,9 @@ filters:
         # Note that any change to these params may not be detected by snakemake
         min_derived: 2
         min_ancestral: 3
+    site_density:
+        window_size: 1000
+        threshold_sites_per_kbp: 100
 
 vcf_to_zarr:
   # These parameters influence the peak RAM usage of the vcf_to_zarr steps
@@ -102,6 +105,10 @@ vcf_to_zarr:
 match_ancestors:
   use_dask: True
 
+match_samples:
+  slice_size: 10
+
+
 # Directory to keep output, progress and resume files
 data_dir: "data/workflow"
 
@@ -119,6 +126,7 @@ sample_subsets:
 dask:
   distributed.scheduler.allowed-failures: 10
   distributed.scheduler.worker-saturation: 1.1
+  temporary_directory': /path/to/tmp
 
 # Cluster config used by the "snakemake-with-dask" script
 cluster:
