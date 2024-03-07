@@ -47,28 +47,67 @@ rule all:
         ),
 
 
-rule vcf_to_zarrs:
+rule bio2zarr_explode:
     input:
         vcf=lambda wildcards: config["vcf"].format(chrom=wildcards.chrom_num),
         tbi=lambda wildcards: config["vcf"].format(chrom=wildcards.chrom_num) + ".tbi",
     output:
-        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done",
-        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "performance_report.html",
+        directory(data_dir / "exploded_vcfs" / "chr{chrom_num}")
+    threads: config["max_threads"]
     resources:
-        dask_cluster=10,
-        mem_mb=16000,
-        time_min=24 * 60,
-        runtime=24 * 60,
-    params:
-        target_part_size="5M",
-        read_chunk_length=config["vcf_to_zarr"]["read_chunk_length"],
-        temp_chunk_length=config["vcf_to_zarr"]["temp_chunk_length"],
-        chunk_length=config["vcf_to_zarr"]["chunk_length"],
-        chunk_width=config["vcf_to_zarr"]["chunk_width"],
-        retain_temp_files=config["vcf_to_zarr"]["retain_temp_files"],
+        mem_mb=config["max_mem"],
+        time_min=config["max_time"],
+        runtime=config["max_time"],
     run:
-        steps.vcf_to_zarrs(input, output, wildcards, config, params)
+        from bio2zarr import vcf
+        Path(output[0]).mkdir(parents=True, exist_ok=True)
+        vcf.explode(
+            [input.vcf],
+            output[0],
+            worker_processes=threads,
+            column_chunk_size=config['bio2zarr']['column_chunk_size']
+        )
 
+rule bio2zarr_mkschema:
+    input:
+        data_dir / "exploded_vcfs" / "chr{chrom_num}"
+    output:
+        data_dir / "zarr_vcfs_schema" / "chr{chrom_num}" / "schema.json",
+    threads: 1
+    resources:
+        mem_mb=16_000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        from bio2zarr import vcf
+        Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
+        with open(output[0], "w") as out:
+            vcf.mkschema(
+                input[0],
+                out,
+            )
+
+rule bio2zarr_encode:
+    input:
+        data_dir / "exploded_vcfs" / "chr{chrom_num}",
+        data_dir / "zarr_vcfs_schema" / "chr{chrom_num}" / "schema.json",
+    output:
+        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done"
+    threads: config["max_threads"]
+    resources:
+        mem_mb=config["max_mem"],
+        time_min=config["max_time"],
+        runtime=config["max_time"],
+    run:
+        from bio2zarr import vcf
+        Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
+        vcf.encode(
+            input[0],
+            output[0].replace(".vcf_done", ""),
+            input[1],
+            worker_processes=threads,
+        )
+        Path(output[0]).touch()
 
 rule load_ancestral_fasta:
     input:
