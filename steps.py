@@ -135,8 +135,9 @@ def region_mask(input, output, wildcards, config, params):  # noqa: A002
     ds = sgkit.load_dataset(ds_dir)
     chrom, start, end = parse_region(config["regions"][wildcards.region_name])
     mask_name = f"variant_{wildcards.region_name}_region_mask"
-    mask = (ds['contig_id'] == chrom) & (ds["variant_position"] >= start) & (ds["variant_position"] < end)
-    mask = mask[0]
+    # get the index of the contig
+    contig_index = ds["contig_id"].values.tolist().index(config["contig_name"].format(chrom=chrom))
+    mask = (ds['variant_contig'] != contig_index) | (ds["variant_position"] < start) | (ds["variant_position"] >= end)
     mask = mask.rename(mask_name).compute()
     ds.update({mask_name: mask})
     sgkit.save_dataset(
@@ -499,9 +500,26 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
         # Default to a sensible value
         window_size = 1000
     all_sites_count = sliding_window_density(numpy.full_like(all_sites, True, dtype=bool), all_sites, window_size)
-    ax.plot(numpy.arange(all_sites[0], all_sites[-1]-window_size+2), (all_sites_count/window_size)*1000, label="All sites")
+    normalised_all_sites_count = (all_sites_count/window_size) * 1000
     filtered_sites_count = sliding_window_density(other_filters_mask, all_sites, window_size)
-    ax.plot(numpy.arange(all_sites[0], all_sites[-1]-window_size+2), (filtered_sites_count/window_size)*1000, label=f"Passing sites{'(not including site_density filter)' if 'site_density' in filter_config else ''}")
+    normalised_filtered_sites_count = (filtered_sites_count / window_size) * 1000
+
+    x_values = []
+    all_y_values = []
+    filtered_y_values = []
+    plotting_window_length = ((all_sites[-1]-window_size+2)-all_sites[0])//10_000
+    for plot_window_start in range(all_sites[0], all_sites[-1]-window_size+2, plotting_window_length):
+        x_values.append(plot_window_start)
+        try:
+            all_y_values.append(numpy.max(normalised_all_sites_count[plot_window_start:plot_window_start+window_size]))
+        except ValueError:
+            all_y_values.append(numpy.nan)
+        try:
+            filtered_y_values.append(numpy.max(normalised_filtered_sites_count[plot_window_start:plot_window_start+window_size]))
+        except ValueError:
+            filtered_y_values.append(numpy.nan)
+    ax.plot(x_values, all_y_values, label="All sites")
+    ax.plot(x_values, filtered_y_values, label=f"Passing sites{'(not including site_density filter)' if 'site_density' in filter_config else ''}")
 
     # If site_density is in the filter config, plot the threshold
     if "site_density" in filter_config:

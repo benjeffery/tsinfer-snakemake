@@ -4,6 +4,7 @@
 ancestral_fasta: test_data/truncated.fasta
 vcf: test_data/vcf{chrom}.gz
 recomb_map: test_data/genetic_map_Hg38_chr{chrom}.txt
+contig_name: chr{chrom}
 
 # https://www.biostars.org/p/435003/#462800
 regions:
@@ -49,7 +50,8 @@ regions:
 #  chr20q: 20:28100001-64318092
 #  chr21p: 21:1-12000000
 #  chr21q: 21:12000001-46680243
-  chr22p: 22:1-15000000
+  chr22p: 22:1-20000000
+#  chr22p: 22:1-15000000
 #  chr22q: 22:15000001-50791377
 
 

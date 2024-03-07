@@ -5,6 +5,10 @@ ancestral_fasta: data/homo_sapiens_ancestor_GRCh38/homo_sapiens_ancestor_{chrom}
 vcf: data/chr{chrom}.vcf.gz
 recomb_map: data/HapMapII_GRCh38/genetic_map_Hg38_chr{chrom}.txt
 
+#Contig names as in the VCF. We use a pattern here as often filenames of
+#fasta/maps are missing prefixes such as in this example
+contig_name: chr{chrom}
+
 # https://www.biostars.org/p/435003/#462800
 regions:
 #  chr1p: 1:1-123400000
