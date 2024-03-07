@@ -228,7 +228,8 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
     ds_dir = input[0].replace(".vcf_done", "")
     ds = sgkit.load_dataset(ds_dir)
     sample_mask = ds[f"sample_{wildcards.subset_name}_subset_mask"].values
-
+    # We don't need to subset here as the filters are using allele counts that
+    # are already subset
     chunks = ds.variant_position.chunks
     filter_config = config["filters"][wildcards.filter_set]
     for filter_name in (set(filter_config) - {"site_density"}) - set(filters.SUBSET_INDEPENDENT_FILTERS):
@@ -244,12 +245,13 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
     # Site density needs to be run after all other filters
     if "site_density" in filter_config:
         # First create a site mask based on all the other filters
-        all_positions = ds["variant_position"].values
-        all_filters_mask = numpy.full_like(all_positions, True, dtype=bool)
+        all_positions = ds["variant_position"]
+        all_filters_mask = xarray.full_like(all_positions, True, dtype=bool)
         for filter_name in set(filter_config) - {"site_density"}:
-            all_filters_mask |= ds[make_filter_key(wildcards.subset_name, filter_name, filter_config[filter_name])].values
-        all_filters_mask |= ds[f"variant_{wildcards.region_name}_region_mask"].values
-
+            all_filters_mask |= ds[make_filter_key(wildcards.subset_name, filter_name, filter_config[filter_name])]
+        all_filters_mask |= ds[f"variant_{wildcards.region_name}_region_mask"]
+        all_filters_mask = all_filters_mask.values
+        all_positions = all_positions.values
         # Retrieve some config
         site_desity_config = filter_config["site_density"]
         window_size = site_desity_config["window_size"]
