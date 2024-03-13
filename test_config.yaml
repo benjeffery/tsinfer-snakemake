@@ -99,7 +99,6 @@ bio2zarr:
 match_ancestors:
   use_dask: True
 match_samples:
-  use_dask: True
   slice_size: 10
 
 # Directory to keep output, progress and resume files
@@ -142,6 +141,9 @@ cluster:
 #    minimum_jobs: 200
 #    wait_count: 10
   class: dask.distributed.LocalCluster
+  kwargs:
+    n_workers: 1
+    threads_per_worker: 1
 
 # Alternatively, specify a dask cluster directly
 scheduler_address: "tcp://192.168.1.65:8786"

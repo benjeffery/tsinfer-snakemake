@@ -92,18 +92,8 @@ filters:
         window_size: 100000
         threshold_sites_per_kbp: 100
 
-vcf_to_zarr:
-  # These parameters influence the peak RAM usage of the vcf_to_zarr steps
-  # For a ~100,000 samples VCF these settings result in about 16GB peak RAM usage
-  # per core. If you have less RAM or more samples you may need to reduce the
-  # values here, keeping chunk_length > temp_chunk_length > read_chunk_length.
-  read_chunk_length: 10000
-  temp_chunk_length: 20000
-  chunk_length: 40000
-  chunk_width: 1500
-  # Temp files are deleted serially, so with large VCFs on slow NFS mounts this
-  # can take a long time. If you have a fast filesystem you can set this to False
-  retain_temp_files: True
+bio2zarr:
+  column_chunk_size: 128
 
 # Dask is optional for the following step, if you're on a single machine set these
 # to False

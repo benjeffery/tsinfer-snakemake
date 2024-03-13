@@ -209,11 +209,14 @@ rule pre_subset_filters:
 
 >>>>>>> Use masks instead of subsetting
     resources:
+        dask_cluster=10,
         mem_mb=16000,
         time_min=4 * 60,
         runtime=4 * 60,
     run:
-        steps.pre_subset_filters(input, output, wildcards, config, params)
+        from distributed import Client
+        with Client(config["scheduler_address"]):
+            steps.pre_subset_filters(input, output, wildcards, config, params)
 
 rule region_mask:
     input:
@@ -227,11 +230,14 @@ rule region_mask:
             / "variant_{region_name}_region_mask"
         ),
     resources:
+        dask_cluster=10,
         mem_mb=16000,
         time_min=4 * 60,
         runtime=4 * 60,
     run:
-        steps.region_mask(input, output, wildcards, config, params)
+        from distributed import Client
+        with Client(config["scheduler_address"]):
+            steps.region_mask(input, output, wildcards, config, params)
 
 rule sample_mask:
     input:
@@ -277,6 +283,7 @@ rule allele_counts:
     input:
         data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done",
         data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / "sample_{subset_name}_subset_mask",
+        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / "variant_ancestral_allele",
     output:
         directory(
             data_dir
@@ -312,7 +319,9 @@ rule allele_counts:
         time_min=4 * 60,
         runtime=4 * 60,
     run:
-        steps.allele_counts(input, output, wildcards, config, params)
+        from distributed import Client
+        with Client(config["scheduler_address"]):
+            steps.allele_counts(input, output, wildcards, config, params)
 
 rule subset_filters:
     input:
@@ -342,11 +351,14 @@ rule subset_filters:
             / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask"
         ),
     resources:
+        dask_cluster=10,
         mem_mb=16000,
         time_min=4 * 60,
         runtime=4 * 60,
     run:
-        steps.subset_filters(input, output, wildcards, config, params)
+        from distributed import Client
+        with Client(config["scheduler_address"]):
+            steps.subset_filters(input, output, wildcards, config, params)
 
 
 rule zarr_stats:
@@ -356,11 +368,14 @@ rule zarr_stats:
     output:
         data_dir / "zarr_stats" / "{subset_name}-{region_name}-{filter_set}" / "stats.json",
     resources:
+        dask_cluster=10,
         mem_mb=16000,
         time_min=4 * 60,
         runtime=4 * 60,
     run:
-        steps.zarr_stats(input, output, wildcards, config, params)
+        from distributed import Client
+        with Client(config["scheduler_address"]):
+            steps.zarr_stats(input, output, wildcards, config, params)
 
 
 checkpoint summary_table:
