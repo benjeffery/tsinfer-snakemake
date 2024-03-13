@@ -89,27 +89,24 @@ def make_filter_key(subset_name, filter_name, filter_kwargs={}):
         ret += f"{subset_name}_subset_"
     ret += f"{filter_name}_"
     if filter_kwargs is not None and len(filter_kwargs) > 0:
-        ret += "_".join([f"{k}_{v}" for k,v in filter_kwargs.items()]) + "_"
+        ret += "_".join([f"{k}_{v}" for k,v in sorted(filter_kwargs.items())]) + "_"
     return ret + "mask"
 
 def pre_subset_filters(input, output, wildcards, config, params):  # noqa: A002
     import sgkit
-    from distributed import Client
+    ds_dir = input[0].replace(".vcf_done", "")
+    ds = sgkit.load_dataset(ds_dir)
+    chunks = ds.variant_position.chunks
 
-    with Client(config["scheduler_address"]):
-        ds_dir = input[0].replace(".vcf_done", "")
-        ds = sgkit.load_dataset(ds_dir)
-        chunks = ds.variant_position.chunks
-
-        for filter_name in filters.SUBSET_INDEPENDENT_FILTERS:
-            mask = getattr(filters, filter_name)(ds, None)
-            # Rename to match sgkit convention
-            filter_key = make_filter_key(None, filter_name)
-            mask = mask.rename(filter_key).chunk(chunks).compute()
-            ds.update({filter_key: mask})
-            sgkit.save_dataset(
-                ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
-            )
+    for filter_name in filters.SUBSET_INDEPENDENT_FILTERS:
+        mask = getattr(filters, filter_name)(ds, None)
+        # Rename to match sgkit convention
+        filter_key = make_filter_key(None, filter_name)
+        mask = mask.rename(filter_key).chunk(chunks)
+        ds.update({filter_key: mask})
+        sgkit.save_dataset(
+            ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
+        )
 
 def sliding_window_density(mask, positions, window_size):
     import numpy
@@ -138,7 +135,7 @@ def region_mask(input, output, wildcards, config, params):  # noqa: A002
     # get the index of the contig
     contig_index = ds["contig_id"].values.tolist().index(config["contig_name"].format(chrom=chrom))
     mask = (ds['variant_contig'] != contig_index) | (ds["variant_position"] < start) | (ds["variant_position"] >= end)
-    mask = mask.rename(mask_name).compute()
+    mask = mask.rename(mask_name)
     ds.update({mask_name: mask})
     sgkit.save_dataset(
         ds.drop_vars(set(ds.data_vars) - {mask_name}), ds_dir, mode="a"
@@ -227,7 +224,6 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
 
     ds_dir = input[0].replace(".vcf_done", "")
     ds = sgkit.load_dataset(ds_dir)
-    sample_mask = ds[f"sample_{wildcards.subset_name}_subset_mask"].values
     # We don't need to subset here as the filters are using allele counts that
     # are already subset
     chunks = ds.variant_position.chunks
@@ -237,7 +233,7 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
             filter_key = make_filter_key(wildcards.subset_name, filter_name, filter_kwargs)
             if filter_key not in ds.keys():
                 mask = getattr(filters, filter_name)(ds, wildcards.subset_name, **(filter_kwargs or {}))
-                mask = mask.rename(filter_key).chunk(chunks).compute()
+                mask = mask.rename(filter_key).chunk(chunks)
                 ds.update({filter_key: mask})
                 sgkit.save_dataset(
                     ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
@@ -294,7 +290,7 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
             site_density_mask[end:] = False
         #Switch to match sgkit convention, not numpy
         site_density_mask = ~site_density_mask
-        str_kwargs = "_".join([f"{k}_{v}" for k, v in site_desity_config.items()])
+        str_kwargs = "_".join([f"{k}_{v}" for k, v in sorted(site_desity_config.items())])
         site_density_mask_key = f"variant_{wildcards.subset_name}_subset_site_density_{str_kwargs}_mask"
         site_density_mask = xarray.DataArray(
             site_density_mask, dims=["variants"], name=site_density_mask_key
@@ -324,8 +320,8 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     import json
     import os
     import numpy
-    from dask.distributed import Client
     import matplotlib.pyplot as plt
+    import pandas as pd
 
     ds_dir = input[0].replace(".vcf_done", "")
     ds = sgkit.load_dataset(ds_dir)
@@ -492,7 +488,6 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
         other_filters_mask |= ds[filter_key].values
 
     all_sites = ds.variant_position.values
-    filtered_sites = all_sites[~other_filters_mask]
     fig = plt.figure(figsize=(20, 12))
     ax = fig.add_subplot(111)
 
@@ -506,22 +501,29 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     filtered_sites_count = sliding_window_density(other_filters_mask, all_sites, window_size)
     normalised_filtered_sites_count = (filtered_sites_count / window_size) * 1000
 
-    x_values = []
-    all_y_values = []
-    filtered_y_values = []
-    plotting_window_length = ((all_sites[-1]-window_size+2)-all_sites[0])//10_000
-    for plot_window_start in range(all_sites[0], all_sites[-1]-window_size+2, plotting_window_length):
-        x_values.append(plot_window_start)
-        try:
-            all_y_values.append(numpy.max(normalised_all_sites_count[plot_window_start:plot_window_start+window_size]))
-        except ValueError:
-            all_y_values.append(numpy.nan)
-        try:
-            filtered_y_values.append(numpy.max(normalised_filtered_sites_count[plot_window_start:plot_window_start+window_size]))
-        except ValueError:
-            filtered_y_values.append(numpy.nan)
-    ax.plot(x_values, all_y_values, label="All sites")
-    ax.plot(x_values, filtered_y_values, label=f"Passing sites{'(not including site_density filter)' if 'site_density' in filter_config else ''}")
+    df = pd.DataFrame(
+        {
+            "position": numpy.arange(min(all_sites), max(all_sites)+2-window_size),
+            "all_sites_count": normalised_all_sites_count,
+            "filtered_sites_count": normalised_filtered_sites_count,
+        }
+    )
+    summary_window_size = len(df) // 10000
+
+    rolling_all_sites = df['all_sites_count'].rolling(window=summary_window_size, min_periods=1)
+    all_sites_stats = rolling_all_sites.agg(['max'])
+    rolling_filtered_sites = df['filtered_sites_count'].rolling(window=summary_window_size,
+                                                                min_periods=1)
+    filtered_sites_stats = rolling_filtered_sites.agg(['max'])
+    summary_df = pd.concat([df['position'], all_sites_stats, filtered_sites_stats],
+                           axis=1)
+
+    # Optionally rename columns for clarity
+    summary_df.columns = ['position', 'all_sites_max',
+                         'filtered_sites_max']
+
+    ax.plot(summary_df['position'], summary_df['all_sites_max'], label="All sites")
+    ax.plot(summary_df['position'], summary_df['filtered_sites_max'], label="Passing sites")
 
     # If site_density is in the filter config, plot the threshold
     if "site_density" in filter_config:
