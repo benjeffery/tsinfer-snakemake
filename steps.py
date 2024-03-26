@@ -94,6 +94,8 @@ def make_filter_key(subset_name, filter_name, filter_kwargs={}):
 
 def pre_subset_filters(input, output, wildcards, config, params):  # noqa: A002
     import sgkit
+    import xarray
+
     ds_dir = input[0].replace(".vcf_done", "")
     ds = sgkit.load_dataset(ds_dir)
     chunks = ds.variant_position.chunks
@@ -103,6 +105,9 @@ def pre_subset_filters(input, output, wildcards, config, params):  # noqa: A002
         # Rename to match sgkit convention
         filter_key = make_filter_key(None, filter_name)
         mask = mask.rename(filter_key).chunk(chunks)
+        # Materialize the mask to avoid blosc decompression error
+        mask = mask.values
+        mask = xarray.DataArray(mask, dims=["variants"], name=filter_key)
         ds.update({filter_key: mask})
         sgkit.save_dataset(
             ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
@@ -110,7 +115,6 @@ def pre_subset_filters(input, output, wildcards, config, params):  # noqa: A002
 
 def sliding_window_density(mask, positions, window_size):
     import numpy
-
     # Make an array of positions of used sites
     used_sites_positions = positions[mask]
     # Create a boolean array covering each base between the start and end of all
