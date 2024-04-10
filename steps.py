@@ -253,10 +253,10 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
         all_filters_mask = all_filters_mask.values
         all_positions = all_positions.values
         # Retrieve some config
-        site_desity_config = filter_config["site_density"]
-        window_size = site_desity_config["window_size"]
+        site_density_config = filter_config["site_density"]
+        window_size = site_density_config["window_size"]
         count_threshold = (
-            site_desity_config["threshold_sites_per_kbp"] / 1000
+            site_density_config["threshold_sites_per_kbp"] / 1000
         ) * window_size
 
         used_sites_count = sliding_window_density(all_filters_mask, all_positions, window_size)
@@ -294,7 +294,7 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
             site_density_mask[end:] = False
         #Switch to match sgkit convention, not numpy
         site_density_mask = ~site_density_mask
-        str_kwargs = "_".join([f"{k}_{v}" for k, v in sorted(site_desity_config.items())])
+        str_kwargs = "_".join([f"{k}_{v}" for k, v in sorted(site_density_config.items())])
         site_density_mask_key = f"variant_{wildcards.subset_name}_subset_site_density_{str_kwargs}_mask"
         site_density_mask = xarray.DataArray(
             site_density_mask, dims=["variants"], name=site_density_mask_key
