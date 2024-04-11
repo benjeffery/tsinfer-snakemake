@@ -2,6 +2,7 @@
 # mount that has high latency.
 import filters
 
+
 def parse_region(region):
     chrom, rest = region.split(":")
     start, stop = map(int, rest.split("-"))
@@ -83,14 +84,16 @@ def load_ancestral_fasta(input, output, wildcards, config, params):  # noqa: A00
     )
 
 
-def make_filter_key(subset_name, filter_name, filter_kwargs={}):
+def make_filter_key(subset_name, filter_name, filter_kwargs=None):
+    filter_kwargs = filter_kwargs or {}
     ret = "variant_"
     if filter_name not in filters.SUBSET_INDEPENDENT_FILTERS:
         ret += f"{subset_name}_subset_"
     ret += f"{filter_name}_"
     if filter_kwargs is not None and len(filter_kwargs) > 0:
-        ret += "_".join([f"{k}_{v}" for k,v in sorted(filter_kwargs.items())]) + "_"
+        ret += "_".join([f"{k}_{v}" for k, v in sorted(filter_kwargs.items())]) + "_"
     return ret + "mask"
+
 
 def pre_subset_filters(input, output, wildcards, config, params):  # noqa: A002
     import sgkit
@@ -113,8 +116,10 @@ def pre_subset_filters(input, output, wildcards, config, params):  # noqa: A002
             ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
         )
 
+
 def sliding_window_density(mask, positions, window_size):
     import numpy
+
     # Make an array of positions of used sites
     used_sites_positions = positions[mask]
     # Create a boolean array covering each base between the start and end of all
@@ -129,6 +134,7 @@ def sliding_window_density(mask, positions, window_size):
     used_sites_count = numpy.convolve(bool_array, window, mode="valid")
     return used_sites_count
 
+
 def region_mask(input, output, wildcards, config, params):  # noqa: A002
     import sgkit
 
@@ -137,13 +143,18 @@ def region_mask(input, output, wildcards, config, params):  # noqa: A002
     chrom, start, end = parse_region(config["regions"][wildcards.region_name])
     mask_name = f"variant_{wildcards.region_name}_region_mask"
     # get the index of the contig
-    contig_index = ds["contig_id"].values.tolist().index(config["contig_name"].format(chrom=chrom))
-    mask = (ds['variant_contig'] != contig_index) | (ds["variant_position"] < start) | (ds["variant_position"] >= end)
+    contig_index = (
+        ds["contig_id"].values.tolist().index(config["contig_name"].format(chrom=chrom))
+    )
+    mask = (
+        (ds["variant_contig"] != contig_index)
+        | (ds["variant_position"] < start)
+        | (ds["variant_position"] >= end)
+    )
     mask = mask.rename(mask_name)
     ds.update({mask_name: mask})
-    sgkit.save_dataset(
-        ds.drop_vars(set(ds.data_vars) - {mask_name}), ds_dir, mode="a"
-    )
+    sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {mask_name}), ds_dir, mode="a")
+
 
 def sample_mask(input, output, wildcards, config, params):  # noqa: A002
     import numpy
@@ -161,14 +172,17 @@ def sample_mask(input, output, wildcards, config, params):  # noqa: A002
             f"Could not find all samples in dataset. "
             f"Failed to find {sample_ids[~sample_mask].values}"
         )
-    sgkit_samples_mask_name= f"sample_{wildcards.subset_name}_subset_mask"
-    array = xarray.DataArray(~sample_mask, dims=["samples"], name=sgkit_samples_mask_name)
+    sgkit_samples_mask_name = f"sample_{wildcards.subset_name}_subset_mask"
+    array = xarray.DataArray(
+        ~sample_mask, dims=["samples"], name=sgkit_samples_mask_name
+    )
     ds.update({sgkit_samples_mask_name: array})
     sgkit.save_dataset(
         ds.drop_vars(set(ds.data_vars) - {sgkit_samples_mask_name}),
         ds_dir,
         mode="a",
     )
+
 
 def allele_counts(input, output, wildcards, config, params):  # noqa: A002
     import sgkit
@@ -189,8 +203,9 @@ def allele_counts(input, output, wildcards, config, params):  # noqa: A002
     ref_count = ac[:, 0]
 
     # Calculate the ancestral allele index
-    allele_matches = (subset_ds["variant_allele"] == subset_ds[
-        "variant_ancestral_allele"]).values
+    allele_matches = (
+        subset_ds["variant_allele"] == subset_ds["variant_ancestral_allele"]
+    ).values
     ancestral_indices = numpy.argmax(allele_matches, axis=1)
     # Mark unknown ancestral alleles as REF. This is just for plots not for inference
     ancestral_indices[numpy.sum(allele_matches, axis=1) == 0] = 0
@@ -210,15 +225,14 @@ def allele_counts(input, output, wildcards, config, params):  # noqa: A002
         array = locals()[var_name]
         # Convert to an xarray DataArray
         array_name = f"variant_{wildcards.subset_name}_subset_{var_name}"
-        array = xarray.DataArray(
-            array, dims=["variants"], name=array_name
-        )
+        array = xarray.DataArray(array, dims=["variants"], name=array_name)
         ds.update({array_name: array})
         sgkit.save_dataset(
             ds.drop_vars(set(ds.data_vars) - {array_name}),
             ds_dir,
             mode="a",
         )
+
 
 def subset_filters(input, output, wildcards, config, params):  # noqa: A002
     import xarray
@@ -232,23 +246,31 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
     # are already subset
     chunks = ds.variant_position.chunks
     filter_config = config["filters"][wildcards.filter_set]
-    for filter_name in (set(filter_config) - {"site_density"}) - set(filters.SUBSET_INDEPENDENT_FILTERS):
-            filter_kwargs = filter_config[filter_name]
-            filter_key = make_filter_key(wildcards.subset_name, filter_name, filter_kwargs)
-            if filter_key not in ds.keys():
-                mask = getattr(filters, filter_name)(ds, wildcards.subset_name, **(filter_kwargs or {}))
-                mask = mask.rename(filter_key).chunk(chunks)
-                ds.update({filter_key: mask})
-                sgkit.save_dataset(
-                    ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
-                )
+    for filter_name in (set(filter_config) - {"site_density"}) - set(
+        filters.SUBSET_INDEPENDENT_FILTERS
+    ):
+        filter_kwargs = filter_config[filter_name]
+        filter_key = make_filter_key(wildcards.subset_name, filter_name, filter_kwargs)
+        if filter_key not in ds.keys():
+            mask = getattr(filters, filter_name)(
+                ds, wildcards.subset_name, **(filter_kwargs or {})
+            )
+            mask = mask.rename(filter_key).chunk(chunks)
+            ds.update({filter_key: mask})
+            sgkit.save_dataset(
+                ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
+            )
     # Site density needs to be run after all other filters
     if "site_density" in filter_config:
         # First create a site mask based on all the other filters
         all_positions = ds["variant_position"]
         all_filters_mask = xarray.full_like(all_positions, True, dtype=bool)
         for filter_name in set(filter_config) - {"site_density"}:
-            all_filters_mask |= ds[make_filter_key(wildcards.subset_name, filter_name, filter_config[filter_name])]
+            all_filters_mask |= ds[
+                make_filter_key(
+                    wildcards.subset_name, filter_name, filter_config[filter_name]
+                )
+            ]
         all_filters_mask |= ds[f"variant_{wildcards.region_name}_region_mask"]
         all_filters_mask = all_filters_mask.values
         all_positions = all_positions.values
@@ -259,11 +281,11 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
             site_density_config["threshold_sites_per_kbp"] / 1000
         ) * window_size
 
-        used_sites_count = sliding_window_density(all_filters_mask, all_positions, window_size)
-
-        site_density_mask = numpy.full_like(
-            ds["variant_position"], True, dtype=bool
+        used_sites_count = sliding_window_density(
+            all_filters_mask, all_positions, window_size
         )
+
+        site_density_mask = numpy.full_like(ds["variant_position"], True, dtype=bool)
         # If none of the sites are above the threshold, mask all sites
         # we have to do this as argmax returns 0 if there are no True values
         if not numpy.any(used_sites_count >= count_threshold):
@@ -292,10 +314,14 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
             end = numpy.argmax(all_positions >= end)
             site_density_mask[:start] = False
             site_density_mask[end:] = False
-        #Switch to match sgkit convention, not numpy
+        # Switch to match sgkit convention, not numpy
         site_density_mask = ~site_density_mask
-        str_kwargs = "_".join([f"{k}_{v}" for k, v in sorted(site_density_config.items())])
-        site_density_mask_key = f"variant_{wildcards.subset_name}_subset_site_density_{str_kwargs}_mask"
+        str_kwargs = "_".join(
+            [f"{k}_{v}" for k, v in sorted(site_density_config.items())]
+        )
+        site_density_mask_key = (
+            f"variant_{wildcards.subset_name}_subset_site_density_{str_kwargs}_mask"
+        )
         site_density_mask = xarray.DataArray(
             site_density_mask, dims=["variants"], name=site_density_mask_key
         )
@@ -309,15 +335,23 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
 
     final_mask = xarray.full_like(ds["variant_position"], False, dtype=bool)
     for filter_name in filter_config:
-        final_mask |= ds[make_filter_key(wildcards.subset_name, filter_name, filter_config[filter_name])].values
-    final_mask |= ds[f'variant_{wildcards.region_name}_region_mask'].values
-    final_mask_key = f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask"
+        final_mask |= ds[
+            make_filter_key(
+                wildcards.subset_name, filter_name, filter_config[filter_name]
+            )
+        ].values
+    final_mask |= ds[f"variant_{wildcards.region_name}_region_mask"].values
+    final_mask_key = (
+        f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_"
+        f"region_{wildcards.filter_set}_mask"
+    )
     final_mask = final_mask.rename(final_mask_key).chunk(chunks).compute()
     ds.update({final_mask_key: final_mask})
 
     sgkit.save_dataset(
         ds.drop_vars(set(ds.data_vars) - {final_mask_key}), ds_dir, mode="a"
     )
+
 
 def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     import sgkit
@@ -329,8 +363,9 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
 
     ds_dir = input[0].replace(".vcf_done", "")
     ds = sgkit.load_dataset(ds_dir)
-    ds = ds.sel(samples=~ds[f"sample_{wildcards.subset_name}_subset_mask"].values,
-                variants=~ds[f"variant_{wildcards.region_name}_region_mask"].values
+    ds = ds.sel(
+        samples=~ds[f"sample_{wildcards.subset_name}_subset_mask"].values,
+        variants=~ds[f"variant_{wildcards.region_name}_region_mask"].values,
     )
     out = {}
     out["dataset_summary"] = str(ds)
@@ -339,9 +374,19 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     out["n_variants"] = ds.dims["variants"]
     out["n_ploidy"] = ds.dims["ploidy"]
     for filter_name in config["filters"][wildcards.filter_set]:
-        filter_key = make_filter_key(wildcards.subset_name, filter_name, config["filters"][wildcards.filter_set][filter_name])
+        filter_key = make_filter_key(
+            wildcards.subset_name,
+            filter_name,
+            config["filters"][wildcards.filter_set][filter_name],
+        )
         out[filter_key] = int((ds[filter_key]).sum())
-    out["sites_masked"] = int((ds[f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask"]).sum())
+    out["sites_masked"] = int(
+        (
+            ds[
+                f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask"
+            ]
+        ).sum()
+    )
     total_size = 0
     for dirpath, _, filenames in os.walk(ds_dir):
         for f in filenames:
@@ -353,9 +398,18 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
 
     counts = [
         ("Ref allele", ds[f"variant_{wildcards.subset_name}_subset_ref_count"].values),
-        ("Ancestral allele", ds[f"variant_{wildcards.subset_name}_subset_ancestral_count"].values),
-        ("Missing allele", ds[f"variant_{wildcards.subset_name}_subset_missing_count"].values),
-        ("Derived allele", ds[f"variant_{wildcards.subset_name}_subset_derived_count"].values),
+        (
+            "Ancestral allele",
+            ds[f"variant_{wildcards.subset_name}_subset_ancestral_count"].values,
+        ),
+        (
+            "Missing allele",
+            ds[f"variant_{wildcards.subset_name}_subset_missing_count"].values,
+        ),
+        (
+            "Derived allele",
+            ds[f"variant_{wildcards.subset_name}_subset_derived_count"].values,
+        ),
     ]
 
     # Plot the allele count spectrum
@@ -392,7 +446,9 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     fig = plt.figure(figsize=(10, 6))
     ax = fig.add_subplot(111)
 
-    final_mask = ds[f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask"].values
+    final_mask = ds[
+        f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask"
+    ].values
     for i, (label, count) in enumerate(counts):
         ax.hist(count[final_mask], bins=200, log=True, histtype="step", label=label)
         text = ", ".join(
@@ -436,7 +492,11 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
 
     # Plot for each filter
     for filter_name in config["filters"][wildcards.filter_set]:
-        filter_key = make_filter_key(wildcards.subset_name, filter_name, config["filters"][wildcards.filter_set][filter_name])
+        filter_key = make_filter_key(
+            wildcards.subset_name,
+            filter_name,
+            config["filters"][wildcards.filter_set][filter_name],
+        )
         mask = ds[filter_key].values
         counts_filter, _ = numpy.histogram(ds.variant_position[~mask], bins=bins)
         fraction = counts_filter / counts_all
@@ -447,15 +507,12 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
         )
 
     # Also plot for the final variant mask
-    counts_final_mask, _ = numpy.histogram(
-        ds.variant_position[~final_mask], bins=bins
-    )
+    counts_final_mask, _ = numpy.histogram(ds.variant_position[~final_mask], bins=bins)
     fraction_final_mask = counts_final_mask / counts_all
     ax.plot(
         bin_centers,
         fraction_final_mask,
-        label=f"variant_mask - "
-        f"{(numpy.sum(final_mask) / ds.dims['variants']):.2f}",
+        label=f"variant_mask - " f"{(numpy.sum(final_mask) / ds.dims['variants']):.2f}",
     )
 
     ax.set_title(
@@ -466,9 +523,7 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     ax.set_ylabel("Fraction of sites passing")
     # Put the legend outside the plot
     box = ax.get_position()
-    ax.set_position(
-        [box.x0, box.y0 + box.height * 0.15, box.width, box.height * 0.85]
-    )
+    ax.set_position([box.x0, box.y0 + box.height * 0.15, box.width, box.height * 0.85])
     ax.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, -0.1),
@@ -488,7 +543,9 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     # to inform threshold choices
     other_filters_mask = numpy.full_like(ds["variant_position"], False, dtype=bool)
     for filter_name in set(filter_config) - {"site_density"}:
-        filter_key = make_filter_key(wildcards.subset_name, filter_name, filter_config[filter_name])
+        filter_key = make_filter_key(
+            wildcards.subset_name, filter_name, filter_config[filter_name]
+        )
         other_filters_mask |= ds[filter_key].values
 
     all_sites = ds.variant_position.values
@@ -500,34 +557,43 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     except KeyError:
         # Default to a sensible value
         window_size = 1000
-    all_sites_count = sliding_window_density(numpy.full_like(all_sites, True, dtype=bool), all_sites, window_size)
-    normalised_all_sites_count = (all_sites_count/window_size) * 1000
-    filtered_sites_count = sliding_window_density(other_filters_mask, all_sites, window_size)
+    all_sites_count = sliding_window_density(
+        numpy.full_like(all_sites, True, dtype=bool), all_sites, window_size
+    )
+    normalised_all_sites_count = (all_sites_count / window_size) * 1000
+    filtered_sites_count = sliding_window_density(
+        other_filters_mask, all_sites, window_size
+    )
     normalised_filtered_sites_count = (filtered_sites_count / window_size) * 1000
 
     df = pd.DataFrame(
         {
-            "position": numpy.arange(min(all_sites), max(all_sites)+2-window_size),
+            "position": numpy.arange(min(all_sites), max(all_sites) + 2 - window_size),
             "all_sites_count": normalised_all_sites_count,
             "filtered_sites_count": normalised_filtered_sites_count,
         }
     )
     summary_window_size = len(df) // 10000
 
-    rolling_all_sites = df['all_sites_count'].rolling(window=summary_window_size, min_periods=1)
-    all_sites_stats = rolling_all_sites.agg(['max'])
-    rolling_filtered_sites = df['filtered_sites_count'].rolling(window=summary_window_size,
-                                                                min_periods=1)
-    filtered_sites_stats = rolling_filtered_sites.agg(['max'])
-    summary_df = pd.concat([df['position'], all_sites_stats, filtered_sites_stats],
-                           axis=1)
+    rolling_all_sites = df["all_sites_count"].rolling(
+        window=summary_window_size, min_periods=1
+    )
+    all_sites_stats = rolling_all_sites.agg(["max"])
+    rolling_filtered_sites = df["filtered_sites_count"].rolling(
+        window=summary_window_size, min_periods=1
+    )
+    filtered_sites_stats = rolling_filtered_sites.agg(["max"])
+    summary_df = pd.concat(
+        [df["position"], all_sites_stats, filtered_sites_stats], axis=1
+    )
 
     # Optionally rename columns for clarity
-    summary_df.columns = ['position', 'all_sites_max',
-                         'filtered_sites_max']
+    summary_df.columns = ["position", "all_sites_max", "filtered_sites_max"]
 
-    ax.plot(summary_df['position'], summary_df['all_sites_max'], label="All sites")
-    ax.plot(summary_df['position'], summary_df['filtered_sites_max'], label="Passing sites")
+    ax.plot(summary_df["position"], summary_df["all_sites_max"], label="All sites")
+    ax.plot(
+        summary_df["position"], summary_df["filtered_sites_max"], label="Passing sites"
+    )
 
     # If site_density is in the filter config, plot the threshold
     if "site_density" in filter_config:
@@ -546,9 +612,7 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     ax.set_ylabel("Number of sites per kb")
     # Put the legend outside the plot
     box = ax.get_position()
-    ax.set_position(
-        [box.x0, box.y0 + box.height * 0.15, box.width, box.height * 0.85]
-    )
+    ax.set_position([box.x0, box.y0 + box.height * 0.15, box.width, box.height * 0.85])
     ax.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, -0.1),
@@ -600,9 +664,7 @@ def summary_table(input, output, wildcards, config, params):  # noqa: A002
                     "n_variants": n_sites,
                     "n_samples": n_samples,
                     "sites_masked": n_masked,
-                    "inference_nbytes": (n_sites - n_masked)
-                    * n_samples
-                    * n_ploidy,
+                    "inference_nbytes": (n_sites - n_masked) * n_samples * n_ploidy,
                     "inference_bitpack_nbytes": (
                         (n_sites - n_masked) * n_samples * n_ploidy
                     )

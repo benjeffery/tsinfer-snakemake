@@ -10,6 +10,7 @@ SUBSET_INDEPENDENT_FILTERS = [
     "low_quality_ancestral_allele",
 ]
 
+
 def bad_ancestral(ds, subset):
     # Filter sites that have a bad ancestral state
     aa = ds["variant_ancestral_allele"]
@@ -50,15 +51,18 @@ def not_snps(ds, subset):
     def check_lengths(arr):
         return numpy.all([len(str(s)) <= 1 for s in arr])
 
-    return ~(xarray.apply_ufunc(
-        check_lengths,
-        ds["variant_allele"],
-        input_core_dims=[["alleles"]],
-        vectorize=True,
-        dask="parallelized",
-        output_dtypes=[bool],
-        dask_gufunc_kwargs={"allow_rechunk": True},
-    ))
+    return ~(
+        xarray.apply_ufunc(
+            check_lengths,
+            ds["variant_allele"],
+            input_core_dims=[["alleles"]],
+            vectorize=True,
+            dask="parallelized",
+            output_dtypes=[bool],
+            dask_gufunc_kwargs={"allow_rechunk": True},
+        )
+    )
+
 
 def low_quality_ancestral_allele(ds, subset):
     # Mask sites that have a lowercase ancestral allele - for
@@ -66,11 +70,10 @@ def low_quality_ancestral_allele(ds, subset):
     # array stored earlier when the fasta was read
     return ds["variant_low_quality_ancestral_allele_mask"]
 
+
 def low_allele_count(ds, subset, min_derived, min_ancestral):
     # Mask sites that have too few derived or ancestral alleles
-    return ~((ds[f"variant_{subset}_subset_ancestral_count"] >= min_ancestral) & (
-        ds[f"variant_{subset}_subset_derived_count"] >= min_derived
-    ))
-
-
-
+    return ~(
+        (ds[f"variant_{subset}_subset_ancestral_count"] >= min_ancestral)
+        & (ds[f"variant_{subset}_subset_derived_count"] >= min_derived)
+    )
