@@ -1,4 +1,4 @@
-git+https://github.com/tskit-dev/tsinfer.git@main
+git+https://github.com/benjeffery/tsinfer.git@mask-names
 sgkit==0.7.0
 aiohttp==3.8.5
 cyvcf2==0.30.22
@@ -11,3 +11,6 @@ snakemake==7.32.4
 bokeh==3.2.2
 pyfaidx==0.7.2.2
 matplotlib==3.8.0
+bio2zarr==0.0.4
+#https://github.com/snakemake/snakemake/issues/2607#issuecomment-1948732242
+pulp==2.7.0
