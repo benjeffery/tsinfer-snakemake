@@ -67,10 +67,9 @@ rule bio2zarr_explode:
     run:
         from bio2zarr import vcf
 
-        Path(output[0]).mkdir(parents=True, exist_ok=True)
         vcf.explode(
-            [input.vcf],
             output[0],
+            [input.vcf],
             worker_processes=threads,
             column_chunk_size=config["bio2zarr"]["column_chunk_size"],
         )
@@ -117,6 +116,7 @@ rule bio2zarr_encode:
             output[0].replace(".vcf_done", ""),
             input[1],
             worker_processes=threads,
+            max_memory=config["max_mem"],
         )
         Path(output[0]).touch()
 
