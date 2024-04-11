@@ -239,6 +239,7 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
     import numpy
     import sgkit
     import filters
+    import pandas as pd
 
     ds_dir = input[0].replace(".vcf_done", "")
     ds = sgkit.load_dataset(ds_dir)
@@ -331,6 +332,28 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
             ds.drop_vars(set(ds.data_vars) - {site_density_mask_key}),
             ds_dir,
             mode="a",
+        )
+
+        # Find regions where the density is below the threshold
+        below_threshold = used_sites_count < count_threshold
+        start_indices = numpy.where(
+            numpy.diff(numpy.concatenate(([False], below_threshold, [False])))
+        )[0][::2]
+        end_indices = numpy.where(
+            numpy.diff(numpy.concatenate(([False], below_threshold, [False])))
+        )[0][1::2]
+        actual_starts = start_indices + first_site
+        actual_ends = end_indices + first_site
+        lengths = actual_ends - actual_starts
+        low_density_data = pd.DataFrame(
+            {
+                "Start": actual_starts,
+                "End": actual_ends,
+                "Length": lengths,
+            }
+        )
+        low_density_data.to_csv(
+            f"{ds_dir}/{site_density_mask_key}_low_density_regions.csv", index=False
         )
 
     final_mask = xarray.full_like(ds["variant_position"], False, dtype=bool)
