@@ -9,6 +9,7 @@ SUBSET_INDEPENDENT_FILTERS = [
     "not_snps",
     "low_quality_ancestral_allele",
 ]
+REGION_DEPENDENT_FILTERS = ["site_density"]
 
 
 def bad_ancestral(ds, subset):

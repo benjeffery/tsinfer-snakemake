@@ -84,11 +84,18 @@ def load_ancestral_fasta(input, output, wildcards, config, params):  # noqa: A00
     )
 
 
-def make_filter_key(subset_name, filter_name, filter_kwargs=None):
+def make_filter_key(
+    subset_name, filter_name, filter_kwargs=None, region_name=None, filter_set=None
+):
     filter_kwargs = filter_kwargs or {}
     ret = "variant_"
     if filter_name not in filters.SUBSET_INDEPENDENT_FILTERS:
         ret += f"{subset_name}_subset_"
+    if filter_name in filters.REGION_DEPENDENT_FILTERS:
+        assert region_name is not None
+        assert filter_set is not None
+        ret += f"{region_name}_region_"
+        ret += f"{filter_set}_"
     ret += f"{filter_name}_"
     if filter_kwargs is not None and len(filter_kwargs) > 0:
         ret += "_".join([f"{k}_{v}" for k, v in sorted(filter_kwargs.items())]) + "_"
@@ -235,10 +242,9 @@ def allele_counts(input, output, wildcards, config, params):  # noqa: A002
 
 
 def subset_filters(input, output, wildcards, config, params):  # noqa: A002
-    import xarray
-    import numpy
     import sgkit
     import filters
+    from pathlib import Path
 
     ds_dir = input[0].replace(".vcf_done", "")
     ds = sgkit.load_dataset(ds_dir)
@@ -251,20 +257,34 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
     ):
         filter_kwargs = filter_config[filter_name]
         filter_key = make_filter_key(wildcards.subset_name, filter_name, filter_kwargs)
-        if filter_key not in ds.keys():
-            mask = getattr(filters, filter_name)(
-                ds, wildcards.subset_name, **(filter_kwargs or {})
-            )
-            mask = mask.rename(filter_key).chunk(chunks)
-            ds.update({filter_key: mask})
-            sgkit.save_dataset(
-                ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
-            )
+        mask = getattr(filters, filter_name)(
+            ds, wildcards.subset_name, **(filter_kwargs or {})
+        )
+        mask = mask.rename(filter_key).chunk(chunks)
+        ds.update({filter_key: mask})
+        sgkit.save_dataset(
+            ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
+        )
+    Path(output[0]).touch()
+
+
+def site_density_mask(input, output, wildcards, config, params):  # noqa: A002
+    import xarray
+    import numpy
+    import sgkit
+    import pandas as pd
+    from pathlib import Path
+
+    ds_dir = input[0].replace(".vcf_done", "")
+    ds = sgkit.load_dataset(ds_dir)
+    chunks = ds.variant_position.chunks
+    filter_config = config["filters"][wildcards.filter_set]
+
     # Site density needs to be run after all other filters
     if "site_density" in filter_config:
         # First create a site mask based on all the other filters
         all_positions = ds["variant_position"]
-        all_filters_mask = xarray.full_like(all_positions, True, dtype=bool)
+        all_filters_mask = xarray.full_like(all_positions, False, dtype=bool)
         for filter_name in set(filter_config) - {"site_density"}:
             all_filters_mask |= ds[
                 make_filter_key(
@@ -285,11 +305,11 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
             all_filters_mask, all_positions, window_size
         )
 
-        site_density_mask = numpy.full_like(ds["variant_position"], True, dtype=bool)
+        site_density_mask = numpy.full_like(ds["variant_position"], False, dtype=bool)
         # If none of the sites are above the threshold, mask all sites
         # we have to do this as argmax returns 0 if there are no True values
         if not numpy.any(used_sites_count >= count_threshold):
-            site_density_mask[:] = False
+            site_density_mask[:] = True
         else:
             # Find the start of the window where the count goes over the threshold
             # from the left
@@ -312,15 +332,14 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
             # Find the index of start and end positions
             start = numpy.argmax(all_positions >= start)
             end = numpy.argmax(all_positions >= end)
-            site_density_mask[:start] = False
-            site_density_mask[end:] = False
-        # Switch to match sgkit convention, not numpy
-        site_density_mask = ~site_density_mask
-        str_kwargs = "_".join(
-            [f"{k}_{v}" for k, v in sorted(site_density_config.items())]
-        )
-        site_density_mask_key = (
-            f"variant_{wildcards.subset_name}_subset_site_density_{str_kwargs}_mask"
+            site_density_mask[:start] = True
+            site_density_mask[end:] = True
+        site_density_mask_key = make_filter_key(
+            wildcards.subset_name,
+            "site_density",
+            site_density_config,
+            wildcards.region_name,
+            wildcards.filter_set,
         )
         site_density_mask = xarray.DataArray(
             site_density_mask, dims=["variants"], name=site_density_mask_key
@@ -333,11 +352,47 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
             mode="a",
         )
 
+        # Find regions where the density is below the threshold
+        below_threshold = used_sites_count < count_threshold
+        start_indices = numpy.where(
+            numpy.diff(numpy.concatenate(([False], below_threshold, [False])))
+        )[0][::2]
+        end_indices = numpy.where(
+            numpy.diff(numpy.concatenate(([False], below_threshold, [False])))
+        )[0][1::2]
+        actual_starts = start_indices + first_site
+        actual_ends = end_indices + first_site
+        lengths = actual_ends - actual_starts
+        low_density_data = pd.DataFrame(
+            {
+                "Start": actual_starts,
+                "End": actual_ends,
+                "Length": lengths,
+            }
+        )
+        low_density_data.to_csv(
+            f"{ds_dir}/{site_density_mask_key}_low_density_regions.csv", index=False
+        )
+    Path(output[0]).touch()
+
+
+def combined_mask(input, output, wildcards, config, params):  # noqa: A002
+    import sgkit
+    import xarray
+
+    ds_dir = input[0].replace(".vcf_done", "")
+    ds = sgkit.load_dataset(ds_dir)
+    chunks = ds.variant_position.chunks
+    filter_config = config["filters"][wildcards.filter_set]
+
     final_mask = xarray.full_like(ds["variant_position"], False, dtype=bool)
-    for filter_name in filter_config:
+    for filter_name in set(filter_config.keys()) - {"site_density"}:
         final_mask |= ds[
             make_filter_key(
-                wildcards.subset_name, filter_name, filter_config[filter_name]
+                wildcards.subset_name,
+                filter_name,
+                filter_config[filter_name],
+                wildcards.region_name,
             )
         ].values
     final_mask |= ds[f"variant_{wildcards.region_name}_region_mask"].values
@@ -378,6 +433,8 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
             wildcards.subset_name,
             filter_name,
             config["filters"][wildcards.filter_set][filter_name],
+            wildcards.region_name,
+            wildcards.filter_set,
         )
         out[filter_key] = int((ds[filter_key]).sum())
     out["sites_masked"] = int(
@@ -496,6 +553,8 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
             wildcards.subset_name,
             filter_name,
             config["filters"][wildcards.filter_set][filter_name],
+            wildcards.region_name,
+            wildcards.filter_set,
         )
         mask = ds[filter_key].values
         counts_filter, _ = numpy.histogram(ds.variant_position[~mask], bins=bins)

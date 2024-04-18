@@ -22,12 +22,11 @@ localrules:
 
 
 def ds_dir(wildcards):
-    return (
-        data_dir
-        / "zarr_vcfs"
-        / f"chr{steps.parse_region(config['regions'][wildcards.region_name])[0]}"
-        / "data.zarr"
-    )
+    if hasattr(wildcards, "region_name"):
+        chr = steps.parse_region(config["regions"][wildcards.region_name])[0]
+    else:
+        chr = wildcards.chrom_num
+    return data_dir / "zarr_vcfs" / f"chr{chr}" / "data.zarr"
 
 
 rule all:
@@ -323,6 +322,67 @@ rule subset_filters:
                 "variant_{subset_name}_subset_ancestral_count",
                 "variant_{subset_name}_subset_missing_count",
                 "variant_{subset_name}_subset_derived_count",
+                "sample_{subset_name}_subset_mask",
+            ],
+        ),
+    output:
+        data_dir
+        / "zarr_vcfs"
+        / "chr{chrom_num}"
+        / "data.zarr"
+        / ".{subset_name}_subset_{filter_set}_filters_done",
+    resources:
+        dask_cluster=10,
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        from distributed import Client
+
+        with Client(config["scheduler_address"]):
+            steps.subset_filters(input, output, wildcards, config, params)
+
+
+rule site_density_mask:
+    input:
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards)
+        / ".{subset_name}_subset_{filter_set}_filters_done",
+        lambda wildcards: ds_dir(wildcards) / "variant_{region_name}_region_mask",
+    output:
+        data_dir
+        / "zarr_vcfs"
+        / "chr{chrom_num}"
+        / "data.zarr"
+        / ".{subset_name}_subset_{region_name}_region_{filter_set}_site_density_mask_done",
+    resources:
+        dask_cluster=10,
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        from distributed import Client
+
+        with Client(config["scheduler_address"]):
+            steps.site_density_mask(input, output, wildcards, config, params)
+
+
+rule combined_mask:
+    input:
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards)
+        / ".{subset_name}_subset_{filter_set}_filters_done",
+        lambda wildcards: ds_dir(wildcards)
+        / ".{subset_name}_subset_{region_name}_region_{filter_set}_site_density_mask_done",
+        lambda wildcards: expand(
+            ds_dir(wildcards) / "{array_name}",
+            array_name=[
+                "variant_bad_ancestral_mask",
+                "variant_no_ancestral_allele_mask",
+                "variant_not_biallelic_mask",
+                "variant_duplicate_position_mask",
+                "variant_not_snps_mask",
+                "variant_low_quality_ancestral_allele_mask",
                 "variant_{region_name}_region_mask",
                 "sample_{subset_name}_subset_mask",
             ],
@@ -344,7 +404,7 @@ rule subset_filters:
         from distributed import Client
 
         with Client(config["scheduler_address"]):
-            steps.subset_filters(input, output, wildcards, config, params)
+            steps.combined_mask(input, output, wildcards, config, params)
 
 
 rule zarr_stats:
