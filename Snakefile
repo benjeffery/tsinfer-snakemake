@@ -40,7 +40,7 @@ rule all:
             data_dir
             / "trees"
             / "{subset_name}-{region_name}-{filter_set}"
-            / "{subset_name}-{region_name}-{filter_set}-truncate-{truncation}-mm{mismatch}-post-processed.trees",
+            / "{subset_name}-{region_name}-{filter_set}-truncate-{truncation}-mm{mismatch}-post-processed-simplified-SDN-dated-{mut_rate_norm_int}.trees",
             subset_name=config["sample_subsets"].keys(),
             region_name=config["regions"].keys(),
             filter_set=config["filters"].keys(),
@@ -48,6 +48,10 @@ rule all:
             truncation=[
                 f"{c['lower']}-{c['upper']}-{c['multiplier']}"
                 for c in config["truncate"]
+            ],
+            mut_rate_norm_int=[
+                f"{c['mutation_rate']}-{c['normalisation_intervals']}"
+                for c in config["tsdate"]
             ],
         ),
 
@@ -109,7 +113,12 @@ rule bio2zarr_encode:
     run:
         from bio2zarr import vcf
 
-        Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
+        # Snakemake creates the output dir - bio2zarr then complains that the output exists
+        # so we need to remove it first
+        try:
+            os.rmdir(data_dir / "zarr_vcfs" / f"chr{wildcards.chrom_num}" / "data.zarr")
+        except FileNotFoundError:
+            pass
         vcf.encode(
             input[0],
             output[0].replace(".vcf_done", ""),
@@ -117,6 +126,8 @@ rule bio2zarr_encode:
             worker_processes=threads,
             max_memory=config["max_mem"],
         )
+        # Remove the consolidated metadata file
+        os.remove(output[0].replace(".vcf_done", ".zmetadata"))
         Path(output[0]).touch()
 
 
@@ -628,10 +639,9 @@ rule match_samples:
         / "trees"
         / "{subset_name}-{region_name}-{filter_set}"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
-    # Minimal threads as we're using dask
-    threads: 2
+    threads: 1
     resources:
-        mem_mb=32000,
+        mem_mb=64000,
         time_min=config["max_time"],
         runtime=config["max_time"],
     run:
@@ -650,10 +660,9 @@ rule post_process:
         / "trees"
         / "{subset_name}-{region_name}-{filter_set}"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed.trees",
-    # Post process is currently not done in parallel
-    threads: 2
+    threads: 1
     resources:
-        mem_mb=64000,
+        mem_mb=16000,
         time_min=4 * 60,
         runtime=4 * 60,
     run:
@@ -662,4 +671,84 @@ rule post_process:
 
         ts = tskit.load(input[0])
         ts = tsinfer.post_process(ts)
+        ts.dump(output[0])
+
+
+rule full_simplify:
+    input:
+        data_dir
+        / "trees"
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed.trees",
+    output:
+        data_dir
+        / "trees"
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed-simplified.trees",
+    threads: 1
+    resources:
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        import tskit
+
+        ts = tskit.load(input[0])
+        ts = ts.simplify()
+        ts.dump(output[0])
+
+
+rule split_disjoint_nodes:
+    input:
+        data_dir
+        / "trees"
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed-simplified.trees",
+    output:
+        data_dir
+        / "trees"
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed-simplified-SDN.trees",
+    threads: 1
+    resources:
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        import tskit
+        import tsdate
+
+        ts = tskit.load(input[0])
+        ts = tsdate.util.split_disjoint_nodes(ts)
+        ts.dump(output[0])
+
+
+rule tsdate:
+    input:
+        data_dir
+        / "trees"
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed-simplified-SDN.trees",
+    output:
+        data_dir
+        / "trees"
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed-simplified-SDN-dated-{mut_rate}-{norm_int}.trees",
+    threads: 1
+    resources:
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        import tskit
+        import tsdate
+
+        ts = tskit.load(input[0])
+        ts = tsdate.date(
+            ts,
+            mutation_rate=float(wildcards.mut_rate),
+            progress=True,
+            method="variational_gamma",
+            normalisation_intervals=int(wildcards.norm_int),
+        )
         ts.dump(output[0])
