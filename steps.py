@@ -21,27 +21,6 @@ def number_to_SI(number):
     return f"{number:.2f}{units[unit]}"
 
 
-def vcf_to_zarrs(input, output, wildcards, config, params):  # noqa: A002
-    import sgkit.io.vcf
-    from pathlib import Path
-    from dask.distributed import Client
-    from dask.distributed import performance_report
-
-    with Client(config["scheduler_address"]), performance_report(filename=output[1]):
-        sgkit.io.vcf.vcf_reader.vcf_to_zarr(
-            input[0],
-            output[0].replace(".vcf_done", ""),
-            target_part_size=params.target_part_size,
-            read_chunk_length=params.read_chunk_length,
-            temp_chunk_length=params.temp_chunk_length,
-            chunk_length=params.chunk_length,
-            chunk_width=params.chunk_width,
-            tempdir=config["temp_dir"],
-            retain_temp_files=params.retain_temp_files,
-        )
-    Path(str(output[0])).touch()
-
-
 def load_ancestral_fasta(input, output, wildcards, config, params):  # noqa: A002
     import pyfaidx
     import numpy
@@ -81,6 +60,7 @@ def load_ancestral_fasta(input, output, wildcards, config, params):  # noqa: A00
         ),
         ds_dir,
         mode="a",
+        consolidated=False,
     )
 
 
@@ -120,7 +100,10 @@ def pre_subset_filters(input, output, wildcards, config, params):  # noqa: A002
         mask = xarray.DataArray(mask, dims=["variants"], name=filter_key)
         ds.update({filter_key: mask})
         sgkit.save_dataset(
-            ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
+            ds.drop_vars(set(ds.data_vars) - {filter_key}),
+            ds_dir,
+            mode="a",
+            consolidated=False,
         )
 
 
@@ -160,7 +143,12 @@ def region_mask(input, output, wildcards, config, params):  # noqa: A002
     )
     mask = mask.rename(mask_name)
     ds.update({mask_name: mask})
-    sgkit.save_dataset(ds.drop_vars(set(ds.data_vars) - {mask_name}), ds_dir, mode="a")
+    sgkit.save_dataset(
+        ds.drop_vars(set(ds.data_vars) - {mask_name}),
+        ds_dir,
+        mode="a",
+        consolidated=False,
+    )
 
 
 def sample_mask(input, output, wildcards, config, params):  # noqa: A002
@@ -188,6 +176,7 @@ def sample_mask(input, output, wildcards, config, params):  # noqa: A002
         ds.drop_vars(set(ds.data_vars) - {sgkit_samples_mask_name}),
         ds_dir,
         mode="a",
+        consolidated=False,
     )
 
 
@@ -238,6 +227,7 @@ def allele_counts(input, output, wildcards, config, params):  # noqa: A002
             ds.drop_vars(set(ds.data_vars) - {array_name}),
             ds_dir,
             mode="a",
+            consolidated=False,
         )
 
 
@@ -263,7 +253,10 @@ def subset_filters(input, output, wildcards, config, params):  # noqa: A002
         mask = mask.rename(filter_key).chunk(chunks)
         ds.update({filter_key: mask})
         sgkit.save_dataset(
-            ds.drop_vars(set(ds.data_vars) - {filter_key}), ds_dir, mode="a"
+            ds.drop_vars(set(ds.data_vars) - {filter_key}),
+            ds_dir,
+            mode="a",
+            consolidated=False,
         )
     Path(output[0]).touch()
 
@@ -350,6 +343,7 @@ def site_density_mask(input, output, wildcards, config, params):  # noqa: A002
             ds.drop_vars(set(ds.data_vars) - {site_density_mask_key}),
             ds_dir,
             mode="a",
+            consolidated=False,
         )
 
         # Find regions where the density is below the threshold
@@ -404,7 +398,10 @@ def combined_mask(input, output, wildcards, config, params):  # noqa: A002
     ds.update({final_mask_key: final_mask})
 
     sgkit.save_dataset(
-        ds.drop_vars(set(ds.data_vars) - {final_mask_key}), ds_dir, mode="a"
+        ds.drop_vars(set(ds.data_vars) - {final_mask_key}),
+        ds_dir,
+        mode="a",
+        consolidated=False,
     )
 
 
@@ -528,8 +525,6 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
     ax.set_xlabel("Allele count")
     ax.set_ylabel("Number of sites")
     ax.legend(loc="upper right")
-    # Add a text box with the number of sites that have an allele count
-    # of 0, 1, 2, n-2, n-1, n where n is the number of samples
 
     fig.savefig(
         f"{config['data_dir']}/zarr_stats/"

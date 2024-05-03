@@ -104,6 +104,13 @@ match_samples:
   slice_size: 10
 
 
+# A list of one or many tsdate parameters to be run
+tsdate:
+  - mutation_rate: 1.29e-8
+    normalisation_intervals: 1000
+  - mutation_rate: 4.2e-8
+    normalisation_intervals: 10
+
 # Directory to keep output, progress and resume files
 data_dir: "data/workflow"
 
