@@ -1,4 +1,4 @@
-git+https://github.com/benjeffery/tsinfer.git@mask-names
+git+https://github.com/benjeffery/tsinfer.git@sample_mask
 git+https://github.com/nspope/tsdate.git@fix-timescale
 sgkit==0.8.0
 aiohttp==3.8.5
