@@ -96,11 +96,17 @@ bio2zarr:
   variants_chunk_size: 20_000
   num_partitions: 500
 
-# Dask is optional for the following step, if you're on a single machine set these
-# to False
 match_ancestors:
-  use_dask: True
+#The max number of groups that will be combined into a single job
+  max_groups: 10
+# A unit of work here is a single site for a single ancestor.
+# Ancestor matching will be split into jobs with at least this
+# much work in, if there is that much. A change to this value will have
+# no effect once the match_ancestors_init rule has run
+  min_work_per_job: 100_000_000
 
+# There is some overhead to batch job, so group this many sample
+# match tasks together
 match_samples:
   slice_size: 10
 
@@ -108,9 +114,7 @@ match_samples:
 # A list of one or many tsdate parameters to be run
 tsdate:
   - mutation_rate: 1.29e-8
-    normalisation_intervals: 1000
   - mutation_rate: 4.2e-8
-    normalisation_intervals: 10
 
 # Directory to keep output, progress and resume files
 data_dir: "data/workflow"
@@ -126,38 +130,6 @@ sample_subsets:
   subset1: "data/subset.csv"
   subsetBob: "data/bob_subset.csv"
 
-# Place dask config here
-dask:
-  distributed.scheduler.allowed-failures: 10
-  distributed.scheduler.worker-saturation: 1.1
-  temporary_directory': /path/to/tmp
-
-# Cluster config used by the "snakemake-with-dask" script
-cluster:
-#  class: dask_jobqueue.LSFCluster
-#  kwargs:
-#      queue: "short"
-#      project: "gecip_lsf_access"
-#      cores: 1
-#      walltime: "03:59"
-#      memory: "15GB"
-#      use_stdin: True
-#      lsf_units: "MB"
-#      job_script_prolouge: ['#BSUB -R "rusage[mem=16000] span[hosts=1]"']
-#      worker_extra_args:
-#        - "--lifetime"
-#        - "230m"
-#        - "--lifetime-stagger"
-#        - "5m"
-#  adapt:
-#    maximum_jobs: 750
-#    minimum_jobs: 200
-#    wait_count: 10
-  class: dask.distributed.LocalCluster
-
-# Alternatively, specify a dask cluster directly
-# scheduler_address: "tcp://x.x.x.x:xxxxx"
-
 # Max threads that will be submitted to the cluster/local
 max_threads: 96
 
@@ -166,12 +138,6 @@ max_mem: 750GB
 
 # Max time to ask the cluster for in minutes
 max_time: 262800 # 6 months
-
-custom_resources:
-  # Each snakemake task that uses the dask cluster can run while other tasks
-  # are using the same cluster. In order to not overload the cluster
-  # we assign a usage in arbitrary units. With the max being 10.
-  dask_cluster: 10
 
 prefix: ""
 #prefix: "module load python/3.8.2 && source tsinfer-env/bin/activate"

@@ -764,78 +764,6 @@ def generate_ancestors(input, output, wildcards, config, threads):  # noqa: A002
         raise ValueError("No sites generated")
 
 
-def match_ancestors(
-    input, output, wildcards, config, threads, params, slug  # noqa: A002
-):
-    import tsinfer
-    import logging
-    import os
-    import asyncio
-    import uuid
-    import subprocess
-    from pathlib import Path
-    from dask.distributed import Client
-    from dask.distributed import performance_report
-
-    logging.basicConfig(level=logging.INFO)
-    data_dir = Path(config["data_dir"])
-    ancestors = tsinfer.AncestorData.load(input[0])
-    sample_data = tsinfer.SgkitSampleData(
-        input[1].replace(".vcf_done", ""),
-        sgkit_samples_mask_name=f"sample_{wildcards.subset_name}_subset_mask",
-        sites_mask_name=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
-    )
-    os.makedirs(data_dir / "progress" / "match_ancestors", exist_ok=True)
-    os.makedirs(data_dir / "resume" / "match_ancestors", exist_ok=True)
-    os.makedirs(os.path.dirname(output[0]), exist_ok=True)
-
-    async def run_match_ancestors_with_workers():
-        # We want to be able to use local CPUs for the small epochs, and then scale
-        # out for the large ones. When scaling out this would leave the local CPUs idle
-        # so we launch local workers too
-        os.makedirs(data_dir / "local_worker_logs", exist_ok=True)
-        with open(
-            f"{data_dir}/local_worker_logs/{slug}-{str(uuid.uuid4())}.log", "w"
-        ) as log_file:
-            worker_process = subprocess.Popen(
-                ["dask-worker", config["scheduler_address"]],
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-            )
-            try:
-                with open(
-                    data_dir / "progress" / "match_ancestors" / f"{slug}.log", "w"
-                ) as log_f, Client(
-                    config["scheduler_address"]
-                ) as client, performance_report(
-                    filename=output[1]
-                ):
-                    # Disable dask's aggressive memory management
-                    client.amm.stop()
-                    ts = tsinfer.match_ancestors(
-                        sample_data,
-                        ancestors,
-                        path_compression=True,
-                        num_threads=threads,
-                        precision=15,
-                        progress_monitor=tsinfer.progress.ProgressMonitor(
-                            tqdm_kwargs={"file": log_f, "mininterval": 30}
-                        ),
-                        resume_lmdb_file=str(
-                            data_dir / "resume" / "match_ancestors" / f"{slug}.lmdb"
-                        ),
-                        use_dask=params.use_dask,
-                    )
-                ts.dump(output[0])
-            finally:
-                worker_process.terminate()
-                worker_process.wait()
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_match_ancestors_with_workers())
-
-
 def build_maps(anc_ts, mismatch, recomb_map):
     import msprime
     import tsinfer
@@ -913,14 +841,13 @@ def match_samples(
     )
     print(sample_data.num_samples)
     os.makedirs(data_dir / "progress" / "match_samples", exist_ok=True)
-    os.makedirs(data_dir / "resume" / "match_samples", exist_ok=True)
     os.makedirs(os.path.dirname(output[0]), exist_ok=True)
     recombination_map, mismatch_map = build_maps(anc_ts, wildcards.mismatch, recomb_map)
     with open(data_dir / "progress" / "match_samples" / f"{slug}.log", "w") as log_f:
         ts = tsinfer.match_samples(
             sample_data,
             anc_ts,
-            match_file_pattern=os.path.dirname(input[-2]) + "/*.path",
+            match_data_dir=os.path.dirname(input[-2]),
             path_compression=True,
             num_threads=threads,
             recombination=recombination_map,

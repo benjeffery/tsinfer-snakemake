@@ -1,7 +1,14 @@
 import yaml
-import dask
+import os.path
 from pathlib import Path
 import steps
+import sys
+import json
+
+
+# The match ancestors step requires as much rescursion as
+# there are ancestor groups
+sys.setrecursionlimit(10000)
 
 
 configfile: "config.yaml"
@@ -19,9 +26,6 @@ def get_resource(rule_name, resource_type):
     else:
         return resources_config["default"][resource_type]
 
-
-for k, v in config["dask"].items():
-    dask.config.set({k: v})
 
 data_dir = Path(config["data_dir"])
 
@@ -51,7 +55,7 @@ rule all:
             data_dir
             / "trees"
             / "{subset_name}-{region_name}-{filter_set}"
-            / "{subset_name}-{region_name}-{filter_set}-truncate-{truncation}-mm{mismatch}-post-processed-simplified-SDN-dated-{mut_rate_norm_int}.trees",
+            / "{subset_name}-{region_name}-{filter_set}-truncate-{truncation}-mm{mismatch}-post-processed-simplified-SDN-dated-{mut_rate}.trees",
             subset_name=config["sample_subsets"].keys(),
             region_name=config["regions"].keys(),
             filter_set=config["filters"].keys(),
@@ -60,10 +64,7 @@ rule all:
                 f"{c['lower']}-{c['upper']}-{c['multiplier']}"
                 for c in config["truncate"]
             ],
-            mut_rate_norm_int=[
-                f"{c['mutation_rate']}-{c['normalisation_intervals']}"
-                for c in config["tsdate"]
-            ],
+            mut_rate=[f"{c['mutation_rate']}" for c in config["tsdate"]],
         ),
 
 
@@ -179,9 +180,7 @@ def dencode_partitions(wildcards):
     with open(checkpoint_output.output[0], "r") as f:
         md = json.load(f)
     return [
-        data_dir
-        / "zarr_vcfs"
-        / f"chr{wildcards.chrom_num}"
+        ds_dir(wildcards) /
         / "data.zarr"
         / f".done_{p}"
         for p in range(md["num_partitions"])
@@ -253,16 +252,9 @@ rule load_ancestral_fasta:
 
 rule pre_subset_filters:
     input:
-        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done",
-        data_dir
-        / "zarr_vcfs"
-        / "chr{chrom_num}"
-        / "data.zarr"
-        / "variant_ancestral_allele",
-        data_dir
-        / "zarr_vcfs"
-        / "chr{chrom_num}"
-        / "data.zarr"
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards) / "variant_ancestral_allele",
+        lambda wildcards: ds_dir(wildcards)
         / "variant_low_quality_ancestral_allele_mask",
     output:
         directory(
@@ -302,20 +294,16 @@ rule pre_subset_filters:
         ),
     threads: get_resource("pre_subset_filters", "threads")
     resources:
-        dask_cluster=10,
         mem_mb=get_resource("pre_subset_filters", "mem_mb"),
         time_min=get_resource("pre_subset_filters", "time_min"),
         runtime=get_resource("pre_subset_filters", "time_min"),
     run:
-        from distributed import Client
-
-        with Client(config["scheduler_address"]):
-            steps.pre_subset_filters(input, output, wildcards, config, params)
+        steps.pre_subset_filters(input, output, wildcards, config, params)
 
 
 rule region_mask:
     input:
-        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
     output:
         directory(
             data_dir
@@ -326,20 +314,16 @@ rule region_mask:
         ),
     threads: get_resource("region_mask", "threads")
     resources:
-        dask_cluster=10,
         mem_mb=get_resource("region_mask", "mem_mb"),
         time_min=get_resource("region_mask", "time_min"),
         runtime=get_resource("region_mask", "time_min"),
     run:
-        from distributed import Client
-
-        with Client(config["scheduler_address"]):
-            steps.region_mask(input, output, wildcards, config, params)
+        steps.region_mask(input, output, wildcards, config, params)
 
 
 rule sample_mask:
     input:
-        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
         lambda wildcards: config["sample_subsets"][wildcards.subset_name],
     output:
         directory(
@@ -360,17 +344,9 @@ rule sample_mask:
 
 rule allele_counts:
     input:
-        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done",
-        data_dir
-        / "zarr_vcfs"
-        / "chr{chrom_num}"
-        / "data.zarr"
-        / "sample_{subset_name}_subset_mask",
-        data_dir
-        / "zarr_vcfs"
-        / "chr{chrom_num}"
-        / "data.zarr"
-        / "variant_ancestral_allele",
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
+        lambda wildcards: ds_dir(wildcards) / "sample_{subset_name}_subset_mask",
+        lambda wildcards: ds_dir(wildcards) / "variant_ancestral_allele",
     output:
         directory(
             data_dir
@@ -402,15 +378,11 @@ rule allele_counts:
         ),
     threads: get_resource("allele_counts", "threads")
     resources:
-        dask_cluster=10,
         mem_mb=get_resource("allele_counts", "mem_mb"),
         time_min=get_resource("allele_counts", "time_min"),
         runtime=get_resource("allele_counts", "time_min"),
     run:
-        from distributed import Client
-
-        with Client(config["scheduler_address"]):
-            steps.allele_counts(input, output, wildcards, config, params)
+        steps.allele_counts(input, output, wildcards, config, params)
 
 
 rule subset_filters:
@@ -440,15 +412,11 @@ rule subset_filters:
         / ".{subset_name}_subset_{filter_set}_filters_done",
     threads: get_resource("subset_filters", "threads")
     resources:
-        dask_cluster=10,
         mem_mb=get_resource("subset_filters", "mem_mb"),
         time_min=get_resource("subset_filters", "time_min"),
         runtime=get_resource("subset_filters", "time_min"),
     run:
-        from distributed import Client
-
-        with Client(config["scheduler_address"]):
-            steps.subset_filters(input, output, wildcards, config, params)
+        steps.subset_filters(input, output, wildcards, config, params)
 
 
 rule site_density_mask:
@@ -465,15 +433,11 @@ rule site_density_mask:
         / ".{subset_name}_subset_{region_name}_region_{filter_set}_site_density_mask_done",
     threads: get_resource("site_density_mask", "threads")
     resources:
-        dask_cluster=10,
         mem_mb=get_resource("site_density_mask", "mem_mb"),
         time_min=get_resource("site_density_mask", "time_min"),
         runtime=get_resource("site_density_mask", "time_min"),
     run:
-        from distributed import Client
-
-        with Client(config["scheduler_address"]):
-            steps.site_density_mask(input, output, wildcards, config, params)
+        steps.site_density_mask(input, output, wildcards, config, params)
 
 
 rule combined_mask:
@@ -506,15 +470,11 @@ rule combined_mask:
         ),
     threads: get_resource("combined_mask", "threads")
     resources:
-        dask_cluster=10,
         mem_mb=get_resource("combined_mask", "mem_mb"),
         time_min=get_resource("combined_mask", "time_min"),
         runtime=get_resource("combined_mask", "time_min"),
     run:
-        from distributed import Client
-
-        with Client(config["scheduler_address"]):
-            steps.combined_mask(input, output, wildcards, config, params)
+        steps.combined_mask(input, output, wildcards, config, params)
 
 
 rule zarr_stats:
@@ -529,15 +489,11 @@ rule zarr_stats:
         / "stats.json",
     threads: get_resource("zarr_stats", "threads")
     resources:
-        dask_cluster=10,
         mem_mb=get_resource("zarr_stats", "mem_mb"),
         time_min=get_resource("zarr_stats", "time_min"),
         runtime=get_resource("zarr_stats", "time_min"),
     run:
-        from distributed import Client
-
-        with Client(config["scheduler_address"]):
-            steps.zarr_stats(input, output, wildcards, config, params)
+        steps.zarr_stats(input, output, wildcards, config, params)
 
 
 checkpoint summary_table:
@@ -615,35 +571,228 @@ rule truncate_ancestors:
             )
 
 
-rule match_ancestors:
+checkpoint match_ancestors_init:
     input:
+        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
         data_dir
         / "ancestors"
         / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}.zarr",
-        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
-        lambda wildcards: ds_dir(wildcards)
-        / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask",
-        lambda wildcards: ds_dir(wildcards) / "sample_{subset_name}_subset_mask",
+    output:
+        data_dir
+        / "ancestors_working"
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "ancestors-truncate-{lower}-{upper}-{multiplier}"
+        / "metadata.json",
+    threads: get_resource("match_ancestors_init","threads")
+    resources:
+        mem_mb=get_resource("match_ancestors_init","mem_mb"),
+        time_min=get_resource("match_ancestors_init","time_min"),
+        runtime=get_resource("match_ancestors_init", "time_min"),
+    run:
+        import tsinfer
+        import logging
+        import matplotlib.pyplot as plt
+
+        logging.basicConfig(level=logging.INFO)
+        tsinfer.match_ancestors_batch_init(
+            working_dir=Path(output[0]).parent,
+            sample_data_path=input[0].replace(".vcf_done", ""),
+            ancestor_data_path=input[1],
+            min_work_per_job=config["match_ancestors"]["min_work_per_job"],
+            sgkit_samples_mask_name=f"sample_{wildcards.subset_name}_subset_mask",
+            sites_mask_name=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
+            path_compression=True,
+            precision=15,
+        )
+        with open(output[0], "r") as f:
+            md = json.load(f)
+            plt.plot(
+                [
+                    len(g["partitions"]) if g["partitions"] is not None else 1
+                    for g in md["ancestor_grouping"]
+                ]
+            )
+            plt.xlabel("Group")
+            plt.ylabel("Number of partitions")
+            plt.title(
+                f"Number of partitions {wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter_set}"
+            )
+            plt.yscale("log")
+            # on a second axis plot num ancestors
+            plt.twinx()
+            plt.plot(
+                [len(g["ancestors"]) for g in md["ancestor_grouping"]],
+                color="red",
+            )
+            plt.yscale("log")
+            plt.ylabel("Number of ancestors")
+            plt.savefig(output[0].replace("metadata.json", "partitions.png"))
+
+
+def ancestor_groupings(checkpoint_output):
+    with open(checkpoint_output.output[0], "r") as f:
+        md = json.load(f)
+    return md["ancestor_grouping"]
+
+
+def num_partitions(checkpoint_output):
+    return ancestor_groupings(checkpoint_output)[int(wildcards.group)]["partitions"]
+
+
+# This function decides if a group should be processed in a single job or partitioned
+def match_ancestor_group_input(wildcards):
+    checkpoint_output = checkpoints.match_ancestors_init.get(**wildcards)
+    match_dir = Path(checkpoint_output.output[0]).parent
+    groupings = ancestor_groupings(checkpoint_output)
+    group_index = int(wildcards.group)
+    partitions = groupings[group_index]["partitions"]
+    if partitions is not None:
+        return expand(
+            f"{match_dir}/group_{group_index}/partition_" + "{partition}.pkl",
+            partition=range(len(partitions)),
+            allow_missing=True,
+        )
+
+    # This group is small enough to do locally
+    # search back until we find a group that requires partitioning, or we reach the start, or we have enough groups
+    max_groups = config["match_ancestors"]["max_groups"]
+    for i in range(group_index, max(group_index - max_groups, 0), -1):
+        if groupings[i]["partitions"] is not None:
+            return match_dir / f"ancestors_{i}.trees"
+    if group_index - max_groups > 0:
+        return match_dir / f"ancestors_{group_index-max_groups}.trees"
+    else:
+        return checkpoint_output.output[0]
+
+
+def match_ancestors_group_num_threads(wildcards):
+    input_ = match_ancestor_group_input(wildcards)
+    if isinstance(input_, list):
+        input_ = input_[0]
+    if ".pkl" in str(input_):
+        return 1
+    else:
+        return config["max_threads"]
+
+
+def match_ancestors_group_ram(wildcards):
+    input_ = match_ancestor_group_input(wildcards)
+    if isinstance(input_, list):
+        input_ = input_[0]
+    if ".pkl" in str(input_):
+        return 16000
+    else:
+        return config["max_mem"]
+
+
+rule match_ancestors_group:
+    input:
+        match_ancestor_group_input,
+    output:
+        data_dir
+        / "ancestors_working"
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "ancestors-truncate-{lower}-{upper}-{multiplier}"
+        / "ancestors_{group}.trees",
+    threads: match_ancestors_group_num_threads
+    resources:
+        mem_mb=match_ancestors_group_ram,
+        time_min=4 * 60,
+        runtime=4 * 60,
+    run:
+        import tsinfer
+        import logging
+
+        logging.basicConfig(level=logging.INFO)
+        if ".pkl" in input[0]:
+            tsinfer.match_ancestors_batch_group_finalise(
+                Path(input[0]).parent.parent,
+                group_index=int(wildcards.group),
+            )
+        else:
+            output_group = int(wildcards.group)
+            if "metadata.json" in input[0]:
+                input_group = -1
+            else:
+                input_group = int(
+                    re.search(r"ancestors_(\d+).trees", input[0]).group(1)
+                )
+            for group in range(input_group + 1, output_group + 1):
+                tsinfer.match_ancestors_batch_group(
+                    Path(input[0]).parent,
+                    group,
+                    threads,
+                )
+
+
+rule match_ancestors_group_partition:
+    input:
+        lambda wildcards: (
+            data_dir
+            / "ancestors_working"
+            / "{subset_name}-{region_name}-{filter_set}"
+            / "ancestors-truncate-{lower}-{upper}-{multiplier}"
+            / f"ancestors_{int(wildcards.group)-1}.trees"
+        ),
+    output:
+        data_dir
+        / "ancestors_working"
+        / "{subset_name}-{region_name}-{filter_set}"
+        / "ancestors-truncate-{lower}-{upper}-{multiplier}"
+        / "group_{group}"
+        / "partition_{partition}.pkl",
+    threads: get_resource("match_ancestors_group_partition", "threads")
+    resources:
+        get_resource("match_ancestors_group_partition", "mem_mb"),
+        get_resource("match_ancestors_group_partition", "time_min"),
+        get_resource("match_ancestors_group_partition", "time_min"),
+    run:
+        import tsinfer
+        import logging
+
+        logging.basicConfig(level=logging.INFO)
+        tsinfer.match_ancestors_batch_group_partition(
+            Path(input[0]).parent,
+            group_index=int(wildcards.group),
+            partition_index=int(wildcards.partition),
+        )
+
+
+def last_ancestor_group(wildcards):
+    checkpoint_output = checkpoints.match_ancestors_init.get(**wildcards)
+    groupings = ancestor_groupings(checkpoint_output)
+    return len(groupings) - 1
+
+
+rule match_ancestors_final:
+    input:
+        lambda wildcards: (
+            data_dir
+            / "ancestors_working"
+            / "{subset_name}-{region_name}-{filter_set}"
+            / "ancestors-truncate-{lower}-{upper}-{multiplier}"
+            / f"ancestors_{last_ancestor_group(wildcards)}.trees"
+        ),
     output:
         data_dir
         / "ancestors"
         / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
-        data_dir
-        / "ancestors"
-        / "{subset_name}-{region_name}-{filter_set}"
-        / "ancestors-truncate-{lower}-{upper}-{multiplier}-performance_report.html",
-    threads: get_resource("match_ancestors", "threads")
+    threads: 1
     resources:
-        mem_mb=get_resource("match_ancestors", "mem_mb"),
-        time_min=get_resource("match_ancestors", "time_min"),
-        runtime=get_resource("match_ancestors", "time_min"),
-    params:
-        use_dask=config["match_ancestors"]["use_dask"],
+        mem_mb=16000,
+        time_min=4 * 60,
+        runtime=4 * 60,
     run:
-        slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter_set}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}"
-        steps.match_ancestors(input, output, wildcards, config, threads, params, slug)
+        import tsinfer
+        import logging
+
+        logging.basicConfig(level=logging.INFO)
+        ts = tsinfer.match_ancestors_batch_finalise(
+            Path(input[0]).parent,
+        )
+        ts.dump(output[0])
 
 
 def get_sample_slices(subset_name):
@@ -782,11 +931,11 @@ rule split_disjoint_nodes:
         / "trees"
         / "{subset_name}-{region_name}-{filter_set}"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed-simplified-SDN.trees",
-    threads: 1
+    threads: get_resource("split_disjoint_nodes", "threads")
     resources:
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("split_disjoint_nodes", "mem_mb"),
+        time_min=get_resource("split_disjoint_nodes", "time_min"),
+        runtime=get_resource("split_disjoint_nodes", "time_min"),
     run:
         import tskit
         import tsdate
@@ -806,12 +955,12 @@ rule tsdate:
         data_dir
         / "trees"
         / "{subset_name}-{region_name}-{filter_set}"
-        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed-simplified-SDN-dated-{mut_rate}-{norm_int}.trees",
-    threads: 1
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed-simplified-SDN-dated-{mut_rate}.trees",
+    threads: get_resource("tsdate", "threads")
     resources:
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("tsdate", "mem_mb"),
+        time_min=get_resource("tsdate", "time_min"),
+        runtime=get_resource("tsdate", "time_min"),
     run:
         import tskit
         import tsdate
@@ -822,6 +971,5 @@ rule tsdate:
             mutation_rate=float(wildcards.mut_rate),
             progress=True,
             method="variational_gamma",
-            normalisation_intervals=int(wildcards.norm_int),
         )
         ts.dump(output[0])
