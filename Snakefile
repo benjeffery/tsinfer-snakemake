@@ -630,10 +630,17 @@ checkpoint match_ancestors_init:
             plt.savefig(output[0].replace("metadata.json", "partitions.png"))
 
 
+# Cluster filesystems are slow so cache the ancestor groupings
+ancestor_groupings_cache = {}
+
+
 def ancestor_groupings(checkpoint_output):
-    with open(checkpoint_output.output[0], "r") as f:
-        md = json.load(f)
-    return md["ancestor_grouping"]
+    output_path = checkpoint_output.output[0]
+    if output_path not in ancestor_groupings_cache:
+        with open(output_path, "r") as f:
+            md = json.load(f)
+            ancestor_groupings_cache[output_path] = md["ancestor_grouping"]
+    return ancestor_groupings_cache[output_path]
 
 
 def num_partitions(checkpoint_output):
@@ -647,7 +654,8 @@ def match_ancestor_group_input(wildcards):
     groupings = ancestor_groupings(checkpoint_output)
     group_index = int(wildcards.group)
     partitions = groupings[group_index]["partitions"]
-    if partitions is not None:
+    # Don't use partitions if we are in the first half of the groups, or there are none
+    if partitions is not None and group_index > len(groupings) // 2:
         return expand(
             f"{match_dir}/group_{group_index}/partition_" + "{partition}.pkl",
             partition=range(len(partitions)),
@@ -658,7 +666,7 @@ def match_ancestor_group_input(wildcards):
     # search back until we find a group that requires partitioning, or we reach the start, or we have enough groups
     max_groups = config["match_ancestors"]["max_groups"]
     for i in range(group_index, max(group_index - max_groups, 0), -1):
-        if groupings[i]["partitions"] is not None:
+        if groupings[i]["partitions"] is not None and i > len(groupings) // 2:
             return match_dir / f"ancestors_{i}.trees"
     if group_index - max_groups > 0:
         return match_dir / f"ancestors_{group_index-max_groups}.trees"
@@ -670,10 +678,21 @@ def match_ancestors_group_num_threads(wildcards):
     input_ = match_ancestor_group_input(wildcards)
     if isinstance(input_, list):
         input_ = input_[0]
-    if ".pkl" in str(input_):
+    input_ = str(input_)
+    # If the input is a pickle file, we are finalising a split group
+    if ".pkl" in input_:
         return 1
+    # The first group is trivial
+    if "metadata.json" in input_:
+        first_group = 0
     else:
-        return config["max_threads"]
+        first_group = int(re.search(r"ancestors_(\d+).trees", input_).group(1))
+    last_group = int(wildcards.group)
+    groupings = ancestor_groupings(checkpoints.match_ancestors_init.get(**wildcards))
+    most_seen_ancestors = 1
+    for i in range(first_group, last_group + 1):
+        most_seen_ancestors = max(most_seen_ancestors, len(groupings[i]["ancestors"]))
+    return min(most_seen_ancestors, config["max_threads"])
 
 
 def match_ancestors_group_ram(wildcards):
@@ -718,12 +737,12 @@ rule match_ancestors_group:
                 input_group = int(
                     re.search(r"ancestors_(\d+).trees", input[0]).group(1)
                 )
-            for group in range(input_group + 1, output_group + 1):
-                tsinfer.match_ancestors_batch_group(
-                    Path(input[0]).parent,
-                    group,
-                    threads,
-                )
+            tsinfer.match_ancestors_batch_groups(
+                Path(input[0]).parent,
+                input_group + 1,
+                output_group + 1,
+                threads,
+            )
 
 
 rule match_ancestors_group_partition:
