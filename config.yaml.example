@@ -130,14 +130,5 @@ sample_subsets:
   subset1: "data/subset.csv"
   subsetBob: "data/bob_subset.csv"
 
-# Max threads that will be submitted to the cluster/local
-max_threads: 96
-
-# Max mem to ask the cluster for
-max_mem: 750GB
-
-# Max time to ask the cluster for in minutes
-max_time: 262800 # 6 months
-
 prefix: ""
 #prefix: "module load python/3.8.2 && source tsinfer-env/bin/activate"

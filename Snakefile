@@ -73,7 +73,7 @@ checkpoint bio2zarr_dexplode_init:
         vcf=lambda wildcards: config["vcf"].format(chrom=wildcards.chrom_num),
         tbi=lambda wildcards: config["vcf"].format(chrom=wildcards.chrom_num) + ".tbi",
     output:
-        data_dir / "exploded_vcfs_md" / "chr{chrom_num}.metadata.json",
+        data_dir / "exploded_vcfs_md" / "chr{chrom_num}" / "metadata.json",
     threads: get_resource("bio2zarr_dexplode_init", "threads")
     resources:
         mem_mb=get_resource("bio2zarr_dexplode_init", "mem_mb"),
@@ -90,7 +90,7 @@ checkpoint bio2zarr_dexplode_init:
 
 rule bio2zarr_dexplode_partition:
     input:
-        data_dir / "exploded_vcfs_md" / "chr{chrom_num}.metadata.json",
+        data_dir / "exploded_vcfs_md" / "chr{chrom_num}" / "metadata.json",
     output:
         data_dir / "exploded_vcfs" / "chr{chrom_num}" / ".done_{partition}",
     threads: get_resource("bio2zarr_dexplode_partition", "threads")
@@ -180,9 +180,7 @@ def dencode_partitions(wildcards):
     with open(checkpoint_output.output[0], "r") as f:
         md = json.load(f)
     return [
-        ds_dir(wildcards) /
-        / "data.zarr"
-        / f".done_{p}"
+        ds_dir(wildcards) / "data.zarr" / f".done_{p}"
         for p in range(md["num_partitions"])
     ]
 
@@ -584,10 +582,10 @@ checkpoint match_ancestors_init:
         / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}"
         / "metadata.json",
-    threads: get_resource("match_ancestors_init","threads")
+    threads: get_resource("match_ancestors_init", "threads")
     resources:
-        mem_mb=get_resource("match_ancestors_init","mem_mb"),
-        time_min=get_resource("match_ancestors_init","time_min"),
+        mem_mb=get_resource("match_ancestors_init", "mem_mb"),
+        time_min=get_resource("match_ancestors_init", "time_min"),
         runtime=get_resource("match_ancestors_init", "time_min"),
     run:
         import tsinfer
@@ -655,7 +653,11 @@ def match_ancestor_group_input(wildcards):
     group_index = int(wildcards.group)
     partitions = groupings[group_index]["partitions"]
     # Don't use partitions if we are in the first half of the groups, or there are none
-    if partitions is not None and group_index > len(groupings) // 2:
+    if (
+        partitions is not None
+        and len(partitions) > get_resource("match_ancestors_group", "threads")
+        and group_index > len(groupings) // 2
+    ):
         return expand(
             f"{match_dir}/group_{group_index}/partition_" + "{partition}.pkl",
             partition=range(len(partitions)),
@@ -666,7 +668,12 @@ def match_ancestor_group_input(wildcards):
     # search back until we find a group that requires partitioning, or we reach the start, or we have enough groups
     max_groups = config["match_ancestors"]["max_groups"]
     for i in range(group_index, max(group_index - max_groups, 0), -1):
-        if groupings[i]["partitions"] is not None and i > len(groupings) // 2:
+        if (
+            groupings[i]["partitions"] is not None
+            and len(groupings[i]["partitions"])
+            > get_resource("match_ancestors_group", "threads")
+            and i > len(groupings) // 2
+        ):
             return match_dir / f"ancestors_{i}.trees"
     if group_index - max_groups > 0:
         return match_dir / f"ancestors_{group_index-max_groups}.trees"
@@ -692,7 +699,7 @@ def match_ancestors_group_num_threads(wildcards):
     most_seen_ancestors = 1
     for i in range(first_group, last_group + 1):
         most_seen_ancestors = max(most_seen_ancestors, len(groupings[i]["ancestors"]))
-    return min(most_seen_ancestors, config["max_threads"])
+    return min(most_seen_ancestors, get_resource("match_ancestors_group", "threads"))
 
 
 def match_ancestors_group_ram(wildcards):
@@ -700,9 +707,14 @@ def match_ancestors_group_ram(wildcards):
     if isinstance(input_, list):
         input_ = input_[0]
     if ".pkl" in str(input_):
-        return 16000
+        # Were just combining results use a small amount
+        return get_resource("default", "mem_mb")
     else:
-        return config["max_mem"]
+        # Scale the RAM by the number of threads we are running out of the max
+        return (
+            get_resource("match_ancestors_group", "mem_mb")
+            / get_resource("match_ancestors_group", "mem_mb")
+        ) * match_ancestors_group_num_threads(wildcards)
 
 
 rule match_ancestors_group:
@@ -717,8 +729,8 @@ rule match_ancestors_group:
     threads: match_ancestors_group_num_threads
     resources:
         mem_mb=match_ancestors_group_ram,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        time_min=get_resource("match_ancestors_group", "time_min"),
+        runtime=get_resource("match_ancestors_group", "time_min"),
     run:
         import tsinfer
         import logging
@@ -763,9 +775,9 @@ rule match_ancestors_group_partition:
         / "partition_{partition}.pkl",
     threads: get_resource("match_ancestors_group_partition", "threads")
     resources:
-        get_resource("match_ancestors_group_partition", "mem_mb"),
-        get_resource("match_ancestors_group_partition", "time_min"),
-        get_resource("match_ancestors_group_partition", "time_min"),
+        mem_mb=get_resource("match_ancestors_group_partition", "mem_mb"),
+        time_min=get_resource("match_ancestors_group_partition", "time_min"),
+        runtime=get_resource("match_ancestors_group_partition", "time_min"),
     run:
         import tsinfer
         import logging
@@ -798,11 +810,11 @@ rule match_ancestors_final:
         / "ancestors"
         / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
-    threads: 1
+    threads: get_resource("match_ancestors_final", "threads")
     resources:
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("match_ancestors_final", "mem_mb"),
+        time_min=get_resource("match_ancestors_final", "time_min"),
+        runtime=get_resource("match_ancestors_final", "time_min"),
     run:
         import tsinfer
         import logging
