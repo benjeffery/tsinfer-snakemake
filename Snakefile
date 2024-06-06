@@ -584,7 +584,11 @@ def match_ancestor_group_input(wildcards):
     group_index = int(wildcards.group)
     partitions = groupings[group_index]["partitions"]
     # Don't use partitions if we are in the first half of the groups, or there are none
-    if partitions is not None and group_index > len(groupings) // 2:
+    if (
+        partitions is not None
+        and len(partitions) > config["max_threads"]
+        and group_index > len(groupings) // 2
+    ):
         return expand(
             f"{match_dir}/group_{group_index}/partition_" + "{partition}.pkl",
             partition=range(len(partitions)),
@@ -595,7 +599,11 @@ def match_ancestor_group_input(wildcards):
     # search back until we find a group that requires partitioning, or we reach the start, or we have enough groups
     max_groups = config["match_ancestors"]["max_groups"]
     for i in range(group_index, max(group_index - max_groups, 0), -1):
-        if groupings[i]["partitions"] is not None and i > len(groupings) // 2:
+        if (
+            groupings[i]["partitions"] is not None
+            and len(groupings[i]["partitions"]) > config["max_threads"]
+            and i > len(groupings) // 2
+        ):
             return match_dir / f"ancestors_{i}.trees"
     if group_index - max_groups > 0:
         return match_dir / f"ancestors_{group_index-max_groups}.trees"
@@ -920,3 +928,4 @@ rule tsdate:
             progress=True,
             method="variational_gamma",
         )
+        ts.dump(output[0])
