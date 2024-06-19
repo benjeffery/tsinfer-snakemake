@@ -12,6 +12,6 @@ snakemake==7.32.4
 bokeh==3.2.2
 pyfaidx==0.7.2.2
 matplotlib==3.8.0
-bio2zarr==0.0.8
+bio2zarr==0.1.0
 #https://github.com/snakemake/snakemake/issues/2607#issuecomment-1948732242
 pulp==2.7.0
