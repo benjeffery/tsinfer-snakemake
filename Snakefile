@@ -207,6 +207,7 @@ rule bio2zarr_dencode_finalise:
         shell(
             f"python -m bio2zarr vcf2zarr dencode-finalise {Path(output[0]).parent} && touch {output[0]}"
         )
+        shell(f"rm -rf {Path(output[0]).parent}/.zmetadata*")
 
 
 rule load_ancestral_fasta:
