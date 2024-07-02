@@ -61,29 +61,24 @@ checkpoint bio2zarr_dexplode_init:
         vcf=lambda wildcards: config["vcf"].format(chrom=wildcards.chrom_num),
         tbi=lambda wildcards: config["vcf"].format(chrom=wildcards.chrom_num) + ".tbi",
     output:
-        data_dir / "exploded_vcfs" / "chr{chrom_num}" / "num_partitions",
+        data_dir / "exploded_vcfs_md" / "chr{chrom_num}.metadata.json",
     threads: 1
     resources:
         mem_mb=16_000,
         time_min=4 * 60,
         runtime=4 * 60,
     run:
-        import json
-
-        shell(
-            f"python -m bio2zarr vcf2zarr dexplode-init --force --num-partitions {config['bio2zarr']['num_partitions']} {input.vcf} {Path(output[0]).parent}"
+        (data_dir / "exploded_vcfs" / f"chr{wildcards.chrom_num}").mkdir(
+            parents=True, exist_ok=True
         )
-        # Write num partitions to a file that doesn't get deleted
-        with open(Path(output[0]).parent / "wip" / "metadata.json", "r") as f:
-            metadata = json.load(f)
-            num_partitions = len(metadata["partitions"])
-        with open(output[0], "w") as f:
-            f.write(str(num_partitions))
+        shell(
+            f"python -m bio2zarr vcf2zarr dexplode-init --json --force --num-partitions {config['bio2zarr']['num_partitions']} {input.vcf} {data_dir}/exploded_vcfs/chr{wildcards.chrom_num} > {output[0]}"
+        )
 
 
 rule bio2zarr_dexplode_partition:
     input:
-        data_dir / "exploded_vcfs" / "chr{chrom_num}" / "num_partitions",
+        data_dir / "exploded_vcfs_md" / "chr{chrom_num}.metadata.json",
     output:
         data_dir / "exploded_vcfs" / "chr{chrom_num}" / ".done_{partition}",
     threads: 1
@@ -93,19 +88,21 @@ rule bio2zarr_dexplode_partition:
         runtime=4 * 60,
     run:
         shell(
-            f"python -m bio2zarr vcf2zarr dexplode-partition {Path(input[0]).parent} {wildcards.partition} && touch {output[0]}"
+            f"python -m bio2zarr vcf2zarr dexplode-partition {Path(output[0]).parent} {wildcards.partition} && touch {output[0]}"
         )
 
 
 def dexplode_partitions(wildcards):
+    import json
+
     checkpoint_output = checkpoints.bio2zarr_dexplode_init.get(
         chrom_num=wildcards.chrom_num
     )
     with open(checkpoint_output.output[0], "r") as f:
-        num_partitions = int(f.read())
+        md = json.load(f)
     return [
         data_dir / "exploded_vcfs" / f"chr{wildcards.chrom_num}" / f".done_{p}"
-        for p in range(num_partitions)
+        for p in range(md["num_partitions"])
     ]
 
 
@@ -147,53 +144,42 @@ checkpoint bio2zarr_dencode_init:
         data_dir / "exploded_vcfs" / "chr{chrom_num}" / ".done",
         data_dir / "zarr_vcfs_schema" / "chr{chrom_num}" / "schema.json",
     output:
-        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / "num_partitions",
+        data_dir / "zarr_vcfs_md" / "chr{chrom_num}.metadata.json",
     threads: 1
     resources:
         mem_mb=16_000,
         time_min=4 * 60,
         runtime=4 * 60,
     run:
-        import json
-
-        shell(
-            f"python -m bio2zarr vcf2zarr dencode-init --force --num-partitions {config['bio2zarr']['num_partitions']} --variants-chunk-size {config['bio2zarr']['variants_chunk_size']} {Path(input[0]).parent} {Path(output[0]).parent}"
+        (data_dir / "zarr_vcfs" / f"chr{wildcards.chrom_num}" / "data.zarr").mkdir(
+            parents=True, exist_ok=True
         )
-        with open(Path(output[0]).parent / "wip" / "metadata.json", "r") as f:
-            md = json.load(f)
-        with open(output[0], "w") as f:
-            f.write(str(len(md["partitions"])))
+        shell(
+            f"python -m bio2zarr vcf2zarr dencode-init --json --force --num-partitions {config['bio2zarr']['num_partitions']} --variants-chunk-size {config['bio2zarr']['variants_chunk_size']} {Path(input[0]).parent} {data_dir}/zarr_vcfs/chr{wildcards.chrom_num}/data.zarr > {output[0]}"
+        )
 
 
 def dencode_partitions(wildcards):
+    import json
+
     checkpoint_output = checkpoints.bio2zarr_dencode_init.get(
         chrom_num=wildcards.chrom_num
     )
     with open(checkpoint_output.output[0], "r") as f:
-        num_partitions = int(f.read())
-    print(
-        [
-            data_dir
-            / "zarr_vcfs"
-            / f"chr{wildcards.chrom_num}"
-            / "data.zarr"
-            / f".done_{p}"
-            for p in range(num_partitions)
-        ]
-    )
+        md = json.load(f)
     return [
         data_dir
         / "zarr_vcfs"
         / f"chr{wildcards.chrom_num}"
         / "data.zarr"
         / f".done_{p}"
-        for p in range(num_partitions)
+        for p in range(md["num_partitions"])
     ]
 
 
 rule bio2zarr_dencode_partition:
     input:
-        data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / "num_partitions",
+        data_dir / "zarr_vcfs_md" / "chr{chrom_num}.metadata.json",
     output:
         data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".done_{partition}",
     threads: 1
@@ -203,7 +189,7 @@ rule bio2zarr_dencode_partition:
         runtime=4 * 60,
     run:
         shell(
-            f"python -m bio2zarr vcf2zarr dencode-partition {Path(input[0]).parent} {wildcards.partition} && touch {output[0]}"
+            f"python -m bio2zarr vcf2zarr dencode-partition {Path(output[0]).parent} {wildcards.partition} && touch {output[0]}"
         )
 
 
