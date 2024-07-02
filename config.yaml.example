@@ -93,7 +93,8 @@ filters:
         threshold_sites_per_kbp: 100
 
 bio2zarr:
-  column_chunk_size: 128
+  variants_chunk_size: 20_000
+  num_partitions: 500
 
 # Dask is optional for the following step, if you're on a single machine set these
 # to False
