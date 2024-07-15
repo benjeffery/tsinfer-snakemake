@@ -1,4 +1,4 @@
-import os.path
+import yaml
 import dask
 from pathlib import Path
 import steps
@@ -8,6 +8,17 @@ configfile: "config.yaml"
 
 
 shell.prefix(config["prefix"])
+
+with open("resources.yaml", "r") as resource_file:
+    resources_config = yaml.safe_load(resource_file)
+
+
+def get_resource(rule_name, resource_type):
+    if rule_name in resources_config and resource_type in resources_config[rule_name]:
+        return resources_config[rule_name][resource_type]
+    else:
+        return resources_config["default"][resource_type]
+
 
 for k, v in config["dask"].items():
     dask.config.set({k: v})
@@ -62,11 +73,11 @@ checkpoint bio2zarr_dexplode_init:
         tbi=lambda wildcards: config["vcf"].format(chrom=wildcards.chrom_num) + ".tbi",
     output:
         data_dir / "exploded_vcfs_md" / "chr{chrom_num}.metadata.json",
-    threads: 1
+    threads: get_resource("bio2zarr_dexplode_init", "threads")
     resources:
-        mem_mb=16_000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("bio2zarr_dexplode_init", "mem_mb"),
+        time_min=get_resource("bio2zarr_dexplode_init", "time_min"),
+        runtime=get_resource("bio2zarr_dexplode_init", "time_min"),
     run:
         (data_dir / "exploded_vcfs" / f"chr{wildcards.chrom_num}").mkdir(
             parents=True, exist_ok=True
@@ -81,11 +92,11 @@ rule bio2zarr_dexplode_partition:
         data_dir / "exploded_vcfs_md" / "chr{chrom_num}.metadata.json",
     output:
         data_dir / "exploded_vcfs" / "chr{chrom_num}" / ".done_{partition}",
-    threads: 1
+    threads: get_resource("bio2zarr_dexplode_partition", "threads")
     resources:
-        mem_mb=16_000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("bio2zarr_dexplode_partition", "mem_mb"),
+        time_min=get_resource("bio2zarr_dexplode_partition", "time_min"),
+        runtime=get_resource("bio2zarr_dexplode_partition", "time_min"),
     run:
         shell(
             f"python -m bio2zarr vcf2zarr dexplode-partition {Path(output[0]).parent} {wildcards.partition} && touch {output[0]}"
@@ -111,11 +122,11 @@ rule bio2zarr_dexplode_finalise:
         dexplode_partitions,
     output:
         data_dir / "exploded_vcfs" / "chr{chrom_num}" / ".done",
-    threads: 1
+    threads: get_resource("bio2zarr_dexplode_finalise", "threads")
     resources:
-        mem_mb=16_000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("bio2zarr_dexplode_finalise", "mem_mb"),
+        time_min=get_resource("bio2zarr_dexplode_finalise", "time_min"),
+        runtime=get_resource("bio2zarr_dexplode_finalise", "time_min"),
     run:
         shell(
             f"python -m bio2zarr vcf2zarr dexplode-finalise {Path(output[0]).parent} && touch {output[0]}"
@@ -127,11 +138,11 @@ rule bio2zarr_mkschema:
         data_dir / "exploded_vcfs" / "chr{chrom_num}" / ".done",
     output:
         data_dir / "zarr_vcfs_schema" / "chr{chrom_num}" / "schema.json",
-    threads: 1
+    threads: get_resource("bio2zarr_mkschema", "threads")
     resources:
-        mem_mb=16_000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("bio2zarr_mkschema", "mem_mb"),
+        time_min=get_resource("bio2zarr_mkschema", "time_min"),
+        runtime=get_resource("bio2zarr_mkschema", "time_min"),
     run:
         Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
         shell(
@@ -145,11 +156,11 @@ checkpoint bio2zarr_dencode_init:
         data_dir / "zarr_vcfs_schema" / "chr{chrom_num}" / "schema.json",
     output:
         data_dir / "zarr_vcfs_md" / "chr{chrom_num}.metadata.json",
-    threads: 1
+    threads: get_resource("bio2zarr_dencode_init", "threads")
     resources:
-        mem_mb=16_000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("bio2zarr_dencode_init", "mem_mb"),
+        time_min=get_resource("bio2zarr_dencode_init", "time_min"),
+        runtime=get_resource("bio2zarr_dencode_init", "time_min"),
     run:
         (data_dir / "zarr_vcfs" / f"chr{wildcards.chrom_num}" / "data.zarr").mkdir(
             parents=True, exist_ok=True
@@ -182,11 +193,11 @@ rule bio2zarr_dencode_partition:
         data_dir / "zarr_vcfs_md" / "chr{chrom_num}.metadata.json",
     output:
         data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".done_{partition}",
-    threads: 1
+    threads: get_resource("bio2zarr_dencode_partition", "threads")
     resources:
-        mem_mb=8_000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("bio2zarr_dencode_partition", "mem_mb"),
+        time_min=get_resource("bio2zarr_dencode_partition", "time_min"),
+        runtime=get_resource("bio2zarr_dencode_partition", "time_min"),
     run:
         shell(
             f"python -m bio2zarr vcf2zarr dencode-partition {Path(output[0]).parent} {wildcards.partition} && touch {output[0]}"
@@ -198,11 +209,11 @@ rule bio2zarr_dencode_finalise:
         dencode_partitions,
     output:
         data_dir / "zarr_vcfs" / "chr{chrom_num}" / "data.zarr" / ".vcf_done",
-    threads: 1
+    threads: get_resource("bio2zarr_dencode_finalise", "threads")
     resources:
-        mem_mb=16_000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("bio2zarr_dencode_finalise", "mem_mb"),
+        time_min=get_resource("bio2zarr_dencode_finalise", "time_min"),
+        runtime=get_resource("bio2zarr_dencode_finalise", "time_min"),
     run:
         shell(
             f"python -m bio2zarr vcf2zarr dencode-finalise {Path(output[0]).parent} && touch {output[0]}"
@@ -229,11 +240,11 @@ rule load_ancestral_fasta:
             / "data.zarr"
             / "variant_low_quality_ancestral_allele_mask"
         ),
-    threads: 1
+    threads: get_resource("load_ancestral_fasta", "threads")
     resources:
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("load_ancestral_fasta", "mem_mb"),
+        time_min=get_resource("load_ancestral_fasta", "time_min"),
+        runtime=get_resource("load_ancestral_fasta", "time_min"),
     run:
         steps.load_ancestral_fasta(input, output, wildcards, config, params)
 
@@ -287,11 +298,12 @@ rule pre_subset_filters:
             / "data.zarr"
             / "variant_no_ancestral_allele_mask"
         ),
+    threads: get_resource("pre_subset_filters", "threads")
     resources:
         dask_cluster=10,
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("pre_subset_filters", "mem_mb"),
+        time_min=get_resource("pre_subset_filters", "time_min"),
+        runtime=get_resource("pre_subset_filters", "time_min"),
     run:
         from distributed import Client
 
@@ -310,11 +322,12 @@ rule region_mask:
             / "data.zarr"
             / "variant_{region_name}_region_mask"
         ),
+    threads: get_resource("region_mask", "threads")
     resources:
         dask_cluster=10,
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("region_mask", "mem_mb"),
+        time_min=get_resource("region_mask", "time_min"),
+        runtime=get_resource("region_mask", "time_min"),
     run:
         from distributed import Client
 
@@ -334,10 +347,11 @@ rule sample_mask:
             / "data.zarr"
             / "sample_{subset_name}_subset_mask"
         ),
+    threads: get_resource("sample_mask", "threads")
     resources:
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("sample_mask", "mem_mb"),
+        time_min=get_resource("sample_mask", "time_min"),
+        runtime=get_resource("sample_mask", "time_min"),
     run:
         steps.sample_mask(input, output, wildcards, config, params)
 
@@ -384,11 +398,12 @@ rule allele_counts:
             / "data.zarr"
             / "variant_{subset_name}_subset_derived_count"
         ),
+    threads: get_resource("allele_counts", "threads")
     resources:
         dask_cluster=10,
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("allele_counts", "mem_mb"),
+        time_min=get_resource("allele_counts", "time_min"),
+        runtime=get_resource("allele_counts", "time_min"),
     run:
         from distributed import Client
 
@@ -421,11 +436,12 @@ rule subset_filters:
         / "chr{chrom_num}"
         / "data.zarr"
         / ".{subset_name}_subset_{filter_set}_filters_done",
+    threads: get_resource("subset_filters", "threads")
     resources:
         dask_cluster=10,
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("subset_filters", "mem_mb"),
+        time_min=get_resource("subset_filters", "time_min"),
+        runtime=get_resource("subset_filters", "time_min"),
     run:
         from distributed import Client
 
@@ -445,11 +461,12 @@ rule site_density_mask:
         / "chr{chrom_num}"
         / "data.zarr"
         / ".{subset_name}_subset_{region_name}_region_{filter_set}_site_density_mask_done",
+    threads: get_resource("site_density_mask", "threads")
     resources:
         dask_cluster=10,
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("site_density_mask", "mem_mb"),
+        time_min=get_resource("site_density_mask", "time_min"),
+        runtime=get_resource("site_density_mask", "time_min"),
     run:
         from distributed import Client
 
@@ -485,11 +502,12 @@ rule combined_mask:
             / "data.zarr"
             / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask"
         ),
+    threads: get_resource("combined_mask", "threads")
     resources:
         dask_cluster=10,
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("combined_mask", "mem_mb"),
+        time_min=get_resource("combined_mask", "time_min"),
+        runtime=get_resource("combined_mask", "time_min"),
     run:
         from distributed import Client
 
@@ -507,11 +525,12 @@ rule zarr_stats:
         / "zarr_stats"
         / "{subset_name}-{region_name}-{filter_set}"
         / "stats.json",
+    threads: get_resource("zarr_stats", "threads")
     resources:
         dask_cluster=10,
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("zarr_stats", "mem_mb"),
+        time_min=get_resource("zarr_stats", "time_min"),
+        runtime=get_resource("zarr_stats", "time_min"),
     run:
         from distributed import Client
 
@@ -534,33 +553,6 @@ checkpoint summary_table:
         steps.summary_table(input, output, wildcards, config, params)
 
 
-def get_ancestor_gen_memory(wildcards):
-    import numpy
-    import json
-
-    # Use the checkpoint to check the stats file exists
-    checkpoint_output = checkpoints.summary_table.get(
-        subset_name=wildcards.subset_name, filter_set=wildcards.filter_set
-    )
-    region_stats = (
-        data_dir
-        / "zarr_stats"
-        / f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter_set}"
-        / "stats.json"
-    )
-    with open(region_stats, "r") as json_stats_f:
-        with open(config["sample_subsets"][wildcards.subset_name], "r") as f:
-            n_samples = len(numpy.genfromtxt(f, dtype=str))
-        stats = json.load(json_stats_f)
-        n_ploidy = stats["n_ploidy"]
-        n_sites = stats["n_variants"]
-        n_masked = stats["sites_masked"]
-        mem = 16_000 + int(
-            ((n_sites - n_masked) * n_samples * n_ploidy) / (8 * 1_048_576)
-        )
-        return mem
-
-
 rule generate_ancestors:
     input:
         lambda wildcards: ds_dir(wildcards) / ".vcf_done",
@@ -576,11 +568,11 @@ rule generate_ancestors:
         / "ancestors"
         / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors.zarr",
-    threads: config["max_threads"]
+    threads: get_resource("generate_ancestors", "threads")
     resources:
-        mem_mb=get_ancestor_gen_memory,
-        time_min=config["max_time"],
-        runtime=config["max_time"],
+        mem_mb=get_resource("generate_ancestors", "mem_mb"),
+        time_min=get_resource("generate_ancestors", "time_min"),
+        runtime=get_resource("generate_ancestors", "time_min"),
     run:
         steps.generate_ancestors(input, output, wildcards, config, threads)
 
@@ -596,11 +588,11 @@ rule truncate_ancestors:
         / "ancestors"
         / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}.zarr",
-    threads: 1
+    threads: get_resource("truncate_ancestors", "threads")
     resources:
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("truncate_ancestors", "mem_mb"),
+        time_min=get_resource("truncate_ancestors", "time_min"),
+        runtime=get_resource("truncate_ancestors", "time_min"),
     run:
         import tsinfer
         import logging
@@ -640,11 +632,11 @@ rule match_ancestors:
         / "ancestors"
         / "{subset_name}-{region_name}-{filter_set}"
         / "ancestors-truncate-{lower}-{upper}-{multiplier}-performance_report.html",
-    threads: config["max_threads"]
+    threads: get_resource("match_ancestors", "threads")
     resources:
-        mem_mb=config["max_mem"],
-        time_min=config["max_time"],
-        runtime=config["max_time"],
+        mem_mb=get_resource("match_ancestors", "mem_mb"),
+        time_min=get_resource("match_ancestors", "time_min"),
+        runtime=get_resource("match_ancestors", "time_min"),
     params:
         use_dask=config["match_ancestors"]["use_dask"],
     run:
@@ -683,11 +675,11 @@ rule match_sample_paths:
         / "paths"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
         / "sample-{sample_index_start}-{sample_index_end}.path",
-    threads: 1
+    threads: get_resource("match_sample_paths", "threads")
     resources:
-        mem_mb=16000,
-        time_min=60 * 4,
-        runtime=60 * 4,
+        mem_mb=get_resource("match_sample_paths", "mem_mb"),
+        time_min=get_resource("match_sample_paths", "time_min"),
+        runtime=get_resource("match_sample_paths", "time_min"),
     run:
         steps.match_sample_path(input, output, wildcards, config, threads, params)
 
@@ -718,11 +710,11 @@ rule match_samples:
         / "trees"
         / "{subset_name}-{region_name}-{filter_set}"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-raw.trees",
-    threads: 1
+    threads: get_resource("match_samples", "threads")
     resources:
-        mem_mb=64000,
-        time_min=config["max_time"],
-        runtime=config["max_time"],
+        mem_mb=get_resource("match_samples", "mem_mb"),
+        time_min=get_resource("match_samples", "time_min"),
+        runtime=get_resource("match_samples", "time_min"),
     run:
         slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter_set}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}-mm-{wildcards.mismatch}"
         steps.match_samples(input, output, wildcards, config, threads, params, slug)
@@ -739,11 +731,11 @@ rule post_process:
         / "trees"
         / "{subset_name}-{region_name}-{filter_set}"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed.trees",
-    threads: 1
+    threads: get_resource("post_process", "threads")
     resources:
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("post_process", "mem_mb"),
+        time_min=get_resource("post_process", "time_min"),
+        runtime=get_resource("post_process", "time_min"),
     run:
         import tsinfer
         import tskit
@@ -764,11 +756,11 @@ rule full_simplify:
         / "trees"
         / "{subset_name}-{region_name}-{filter_set}"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}-post-processed-simplified.trees",
-    threads: 1
+    threads: get_resource("full_simplify", "threads")
     resources:
-        mem_mb=16000,
-        time_min=4 * 60,
-        runtime=4 * 60,
+        mem_mb=get_resource("full_simplify", "mem_mb"),
+        time_min=get_resource("full_simplify", "time_min"),
+        runtime=get_resource("full_simplify", "time_min"),
     run:
         import tskit
 
