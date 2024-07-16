@@ -207,7 +207,9 @@ rule bio2zarr_dencode_finalise:
         shell(
             f"python -m bio2zarr vcf2zarr dencode-finalise {Path(output[0]).parent} && touch {output[0]}"
         )
+        # Remove the metadata files so thaat we can write extra arrays later without updating it.
         shell(f"rm -rf {Path(output[0]).parent}/.zmetadata*")
+        shell(f"touch {Path(output[0])}")
 
 
 rule load_ancestral_fasta:
