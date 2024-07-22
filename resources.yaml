@@ -1,0 +1,16 @@
+default:
+  threads: 1
+  mem_mb: 8000
+  time_min: 240  # 4 hours
+
+# Override defaults for specific rules
+allele_counts:
+  threads: 32
+  mem_mb: 64000
+  time_min: 1440  # 24 hours
+
+
+generate_ancestors:
+  threads: 32
+  mem_mb: 64000 #This depends on chromosome size - see summary table output for advised size
+  time_min: 43800  # 1 month
