@@ -73,7 +73,7 @@ checkpoint bio2zarr_dexplode_init:
         vcf=lambda wildcards: config["vcf"].format(chrom=wildcards.chrom_num),
         tbi=lambda wildcards: config["vcf"].format(chrom=wildcards.chrom_num) + ".tbi",
     output:
-        data_dir / "exploded_vcfs_md" / "chr{chrom_num}" / "metadata.json",
+        data_dir / "exploded_vcfs_md" / "chr{chrom_num}.metadata.json",
     threads: get_resource("bio2zarr_dexplode_init", "threads")
     resources:
         mem_mb=get_resource("bio2zarr_dexplode_init", "mem_mb"),
@@ -90,7 +90,7 @@ checkpoint bio2zarr_dexplode_init:
 
 rule bio2zarr_dexplode_partition:
     input:
-        data_dir / "exploded_vcfs_md" / "chr{chrom_num}" / "metadata.json",
+        data_dir / "exploded_vcfs_md" / "chr{chrom_num}.metadata.json",
     output:
         data_dir / "exploded_vcfs" / "chr{chrom_num}" / ".done_{partition}",
     threads: get_resource("bio2zarr_dexplode_partition", "threads")
@@ -179,10 +179,7 @@ def dencode_partitions(wildcards):
     )
     with open(checkpoint_output.output[0], "r") as f:
         md = json.load(f)
-    return [
-        ds_dir(wildcards) / "data.zarr" / f".done_{p}"
-        for p in range(md["num_partitions"])
-    ]
+    return [ds_dir(wildcards) / f".done_{p}" for p in range(md["num_partitions"])]
 
 
 rule bio2zarr_dencode_partition:
