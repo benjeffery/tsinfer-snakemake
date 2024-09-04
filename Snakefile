@@ -594,9 +594,10 @@ checkpoint match_ancestors_init:
             working_dir=Path(output[0]).parent,
             sample_data_path=input[0].replace(".vcf_done", ""),
             ancestor_data_path=input[1],
+            ancestral_allele="variant_ancestral_allele",
             min_work_per_job=config["match_ancestors"]["min_work_per_job"],
-            sgkit_samples_mask_name=f"sample_{wildcards.subset_name}_subset_mask",
-            sites_mask_name=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
+            sample_mask=f"sample_{wildcards.subset_name}_subset_mask",
+            site_mask=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
             path_compression=True,
             precision=15,
         )
@@ -823,20 +824,7 @@ rule match_ancestors_final:
         ts.dump(output[0])
 
 
-def get_sample_slices(subset_name):
-    import numpy
-
-    with open(config["sample_subsets"][subset_name], "r") as f:
-        # FIXME! We need to know the ploidy here
-        num_samples = len(numpy.genfromtxt(f, dtype=str)) * 2
-        # Generate starts and ends for each chunk, of size config["match_samples"]["slice_size"]
-        return [
-            (i, min(i + config["match_samples"]["slice_size"] - 1, num_samples - 1))
-            for i in range(0, num_samples, config["match_samples"]["slice_size"])
-        ]
-
-
-rule match_sample_paths:
+checkpoint match_samples_init:
     input:
         data_dir
         / "ancestors"
@@ -851,38 +839,90 @@ rule match_sample_paths:
         ),
     output:
         data_dir
-        / "paths"
+        / "samples_working"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
-        / "sample-{sample_index_start}-{sample_index_end}.path",
+        / "wd.json",
+    threads: get_resource("match_samples_init", "threads")
+    resources:
+        mem_mb=get_resource("match_samples_init", "mem_mb"),
+        time_min=get_resource("match_samples_init", "time_min"),
+        runtime=get_resource("match_samples_init", "time_min"),
+    run:
+        import tsinfer
+        import logging
+        import tskit
+        from pathlib import Path
+
+        logging.basicConfig(level=logging.INFO)
+        data_dir = Path(config["data_dir"])
+        anc_ts = tskit.load(input[0])
+        recomb_map = input[-1]
+        (data_dir / "progress" / "match_samples").mkdir(parents=True, exist_ok=True)
+        Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
+        recombination_map, mismatch_map = steps.build_maps(
+            anc_ts, wildcards.mismatch, recomb_map
+        )
+        tsinfer.match_samples_batch_init(
+            Path(output[0]).parent,
+            input[1].replace(".vcf_done", ""),
+            "variant_ancestral_allele",
+            input[0],
+            config["match_samples"]["min_work_per_job"],
+            max_num_partitions=config["match_samples"]["max_num_partitions"],
+            sample_mask=f"sample_{wildcards.subset_name}_subset_mask",
+            site_mask=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
+            path_compression=True,
+            recombination=recombination_map,
+            mismatch=mismatch_map,
+            precision=15,
+            post_process=False,
+        )
+
+
+def get_sample_partitions(wildcards):
+    checkpoint_output = checkpoints.match_samples_init.get(**wildcards)
+    with open(checkpoint_output.output[0], "r") as f:
+        md = json.load(f)
+    return md["num_partitions"]
+
+
+rule match_sample_partitions:
+    input:
+        data_dir
+        / "samples_working"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
+        / "wd.json",
+    output:
+        data_dir
+        / "samples_working"
+        / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
+        / "partition_{partition}.pkl",
     threads: get_resource("match_sample_paths", "threads")
     resources:
         mem_mb=get_resource("match_sample_paths", "mem_mb"),
         time_min=get_resource("match_sample_paths", "time_min"),
         runtime=get_resource("match_sample_paths", "time_min"),
     run:
-        steps.match_sample_path(input, output, wildcards, config, threads, params)
+        import tsinfer
+        import logging
+
+        logging.basicConfig(level=logging.INFO)
+        work_dir = Path(output[0]).parent
+        tsinfer.match_samples_batch_partition(
+            work_dir,
+            partition_index=int(wildcards.partition),
+        )
 
 
-rule match_samples:
+rule match_samples_finalise:
     input:
-        data_dir
-        / "ancestors"
-        / "{subset_name}-{region_name}-{filter_set}"
-        / "ancestors-truncate-{lower}-{upper}-{multiplier}.trees",
-        lambda wildcards: ds_dir(wildcards) / ".vcf_done",
-        lambda wildcards: ds_dir(wildcards)
-        / "variant_{subset_name}_subset_{region_name}_region_{filter_set}_mask",
-        lambda wildcards: ds_dir(wildcards) / "sample_{subset_name}_subset_mask",
         lambda wildcards: expand(
             data_dir
-            / "paths"
+            / "samples_working"
             / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
-            / "sample-{sample_slice[0]}-{sample_slice[1]}.path",
-            sample_slice=get_sample_slices(wildcards.subset_name),
-            allow_missing=True,
-        ),
-        lambda wildcards: config["recomb_map"].format(
-            chrom=steps.parse_region(config["regions"][wildcards.region_name])[0]
+            / "partition_{partition}.pkl",
+            partition=range(get_sample_partitions(wildcards)),
+            **wildcards,
         ),
     output:
         data_dir
@@ -895,8 +935,13 @@ rule match_samples:
         time_min=get_resource("match_samples", "time_min"),
         runtime=get_resource("match_samples", "time_min"),
     run:
-        slug = f"{wildcards.subset_name}-{wildcards.region_name}-{wildcards.filter_set}-truncate-{wildcards.lower}-{wildcards.upper}-{wildcards.multiplier}-mm-{wildcards.mismatch}"
-        steps.match_samples(input, output, wildcards, config, threads, params, slug)
+        import tsinfer
+        import logging
+
+        logging.basicConfig(level=logging.INFO)
+        work_dir = Path(input[0]).parent
+        ts = tsinfer.match_samples_batch_finalise(work_dir)
+        ts.dump(output[0])
 
 
 rule post_process:

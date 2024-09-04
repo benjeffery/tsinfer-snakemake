@@ -1,4 +1,4 @@
-git+https://github.com/benjeffery/tsinfer.git@batch_match
+git+https://github.com/tskit-dev/tsinfer.git@main
 git+https://github.com/tskit-dev/tsdate.git@main
 sgkit==0.9.0
 aiohttp==3.9.5
