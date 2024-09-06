@@ -99,7 +99,8 @@ match_ancestors:
   max_groups: 10
   min_work_per_job: 100_000_000
 match_samples:
-  slice_size: 10
+  min_work_per_job: 10_000_000
+  max_num_partitions: 10_000
 
 tsdate:
   - mutation_rate: 1.29e-8

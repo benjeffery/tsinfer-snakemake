@@ -97,7 +97,7 @@ bio2zarr:
   num_partitions: 500
 
 match_ancestors:
-#The max number of groups that will be combined into a single job
+# The max number of groups that will be combined into a single job
   max_groups: 10
 # A unit of work here is a single site for a single ancestor.
 # Ancestor matching will be split into jobs with at least this
@@ -105,10 +105,11 @@ match_ancestors:
 # no effect once the match_ancestors_init rule has run
   min_work_per_job: 100_000_000
 
-# There is some overhead to batch job, so group this many sample
-# match tasks together
 match_samples:
-  slice_size: 10
+  # Similar to ancestor matching this is the smallest amount of sites
+  # that will be sample matched in a single batch job
+  min_work_per_job: 100_000_000
+  max_num_partitions: 10_000
 
 
 # A list of one or many tsdate parameters to be run

@@ -167,13 +167,11 @@ def sample_mask(input, output, wildcards, config, params):  # noqa: A002
             f"Could not find all samples in dataset. "
             f"Failed to find {sample_ids[~sample_mask].values}"
         )
-    sgkit_samples_mask_name = f"sample_{wildcards.subset_name}_subset_mask"
-    array = xarray.DataArray(
-        ~sample_mask, dims=["samples"], name=sgkit_samples_mask_name
-    )
-    ds.update({sgkit_samples_mask_name: array})
+    sample_mask_name = f"sample_{wildcards.subset_name}_subset_mask"
+    array = xarray.DataArray(~sample_mask, dims=["samples"], name=sample_mask_name)
+    ds.update({sample_mask_name: array})
     sgkit.save_dataset(
-        ds.drop_vars(set(ds.data_vars) - {sgkit_samples_mask_name}),
+        ds.drop_vars(set(ds.data_vars) - {sample_mask_name}),
         ds_dir,
         mode="a",
         consolidated=False,
@@ -557,7 +555,7 @@ def zarr_stats(input, output, wildcards, config, params):  # noqa: A002
         ax.plot(
             bin_centers,
             fraction,
-            label=f"{filter_name} - {mask.sum()/ds.dims['variants']:.2f}",
+            label=f"{filter_name} - {mask.sum() / ds.dims['variants']:.2f}",
         )
 
     # Also plot for the final variant mask
@@ -736,10 +734,11 @@ def generate_ancestors(input, output, wildcards, config, threads):  # noqa: A002
 
     logging.basicConfig(level=logging.INFO)
     data_dir = Path(config["data_dir"])
-    sample_data = tsinfer.SgkitSampleData(
+    sample_data = tsinfer.VariantData(
         input[0].replace(".vcf_done", ""),
-        sgkit_samples_mask_name=f"sample_{wildcards.subset_name}_subset_mask",
-        sites_mask_name=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
+        sample_mask=f"sample_{wildcards.subset_name}_subset_mask",
+        site_mask=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
+        ancestral_allele="variant_ancestral_allele",
     )
     os.makedirs(data_dir / "progress" / "generate_ancestors", exist_ok=True)
     with open(
@@ -791,71 +790,3 @@ def build_maps(anc_ts, mismatch, recomb_map):
         recombination_map = None
         mismatch_map = None
     return recombination_map, mismatch_map
-
-
-def match_sample_path(input, output, wildcards, config, threads, params):  # noqa: A002
-    import tsinfer
-    import tskit
-    import os
-    import logging
-
-    logging.basicConfig(level=logging.INFO)
-    anc_ts = tskit.load(input[0])
-    sample_data = tsinfer.SgkitSampleData(
-        input[1].replace(".vcf_done", ""),
-        sgkit_samples_mask_name=f"sample_{wildcards.subset_name}_subset_mask",
-        sites_mask_name=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
-    )
-    recomb_map = input[-1]
-    os.makedirs(os.path.dirname(output[0]), exist_ok=True)
-    recombination_map, mismatch_map = build_maps(anc_ts, wildcards.mismatch, recomb_map)
-    tsinfer.match_samples_slice_to_disk(
-        sample_data,
-        anc_ts,
-        (int(wildcards.sample_index_start), int(wildcards.sample_index_end) + 1),
-        output[0],
-        path_compression=True,
-        recombination=recombination_map,
-        mismatch=mismatch_map,
-        precision=15,
-    )
-
-
-def match_samples(
-    input, output, wildcards, config, threads, params, slug  # noqa: A002
-):
-    import tsinfer
-    import logging
-    import tskit
-    from pathlib import Path
-    import os
-
-    logging.basicConfig(level=logging.INFO)
-    data_dir = Path(config["data_dir"])
-    anc_ts = tskit.load(input[0])
-    recomb_map = input[-1]
-    sample_data = tsinfer.SgkitSampleData(
-        input[1].replace(".vcf_done", ""),
-        sgkit_samples_mask_name=f"sample_{wildcards.subset_name}_subset_mask",
-        sites_mask_name=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
-    )
-    print(sample_data.num_samples)
-    os.makedirs(data_dir / "progress" / "match_samples", exist_ok=True)
-    os.makedirs(os.path.dirname(output[0]), exist_ok=True)
-    recombination_map, mismatch_map = build_maps(anc_ts, wildcards.mismatch, recomb_map)
-    with open(data_dir / "progress" / "match_samples" / f"{slug}.log", "w") as log_f:
-        ts = tsinfer.match_samples(
-            sample_data,
-            anc_ts,
-            match_data_dir=os.path.dirname(input[-2]),
-            path_compression=True,
-            num_threads=threads,
-            recombination=recombination_map,
-            mismatch=mismatch_map,
-            precision=15,
-            progress_monitor=tsinfer.progress.ProgressMonitor(
-                tqdm_kwargs={"file": log_f, "mininterval": 30}
-            ),
-            post_process=False,
-        )
-    ts.dump(output[0])
