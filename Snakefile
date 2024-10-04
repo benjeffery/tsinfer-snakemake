@@ -711,7 +711,7 @@ def match_ancestors_group_ram(wildcards):
         # Scale the RAM by the number of threads we are running out of the max
         return (
             get_resource("match_ancestors_group", "mem_mb")
-            / get_resource("match_ancestors_group", "mem_mb")
+            / get_resource("match_ancestors_group", "threads")
         ) * match_ancestors_group_num_threads(wildcards)
 
 
