@@ -591,10 +591,10 @@ checkpoint match_ancestors_init:
 
         logging.basicConfig(level=logging.INFO)
         tsinfer.match_ancestors_batch_init(
-            working_dir=Path(output[0]).parent,
-            sample_data_path=input[0].replace(".vcf_done", ""),
+            work_dir=Path(output[0]).parent,
+            variant_data_path=input[0].replace(".vcf_done", ""),
             ancestor_data_path=input[1],
-            ancestral_allele="variant_ancestral_allele",
+            ancestral_state="variant_ancestral_allele",
             min_work_per_job=config["match_ancestors"]["min_work_per_job"],
             sample_mask=f"sample_{wildcards.subset_name}_subset_mask",
             site_mask=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
@@ -674,7 +674,7 @@ def match_ancestor_group_input(wildcards):
         ):
             return match_dir / f"ancestors_{i}.trees"
     if group_index - max_groups > 0:
-        return match_dir / f"ancestors_{group_index-max_groups}.trees"
+        return match_dir / f"ancestors_{group_index - max_groups}.trees"
     else:
         return checkpoint_output.output[0]
 
@@ -762,7 +762,7 @@ rule match_ancestors_group_partition:
             / "ancestors_working"
             / "{subset_name}-{region_name}-{filter_set}"
             / "ancestors-truncate-{lower}-{upper}-{multiplier}"
-            / f"ancestors_{int(wildcards.group)-1}.trees"
+            / f"ancestors_{int(wildcards.group) - 1}.trees"
         ),
     output:
         data_dir
@@ -841,7 +841,7 @@ checkpoint match_samples_init:
         data_dir
         / "samples_working"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
-        / "wd.json",
+        / "metadata.json",
     threads: get_resource("match_samples_init", "threads")
     resources:
         mem_mb=get_resource("match_samples_init", "mem_mb"),
@@ -868,7 +868,6 @@ checkpoint match_samples_init:
             "variant_ancestral_allele",
             input[0],
             config["match_samples"]["min_work_per_job"],
-            max_num_partitions=config["match_samples"]["max_num_partitions"],
             sample_mask=f"sample_{wildcards.subset_name}_subset_mask",
             site_mask=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
             path_compression=True,
@@ -891,7 +890,7 @@ rule match_sample_partitions:
         data_dir
         / "samples_working"
         / "{subset_name}-{region_name}-{filter_set}-truncate-{lower}-{upper}-{multiplier}-mm{mismatch}"
-        / "wd.json",
+        / "metadata.json",
     output:
         data_dir
         / "samples_working"

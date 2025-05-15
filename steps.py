@@ -738,7 +738,7 @@ def generate_ancestors(input, output, wildcards, config, threads):  # noqa: A002
         input[0].replace(".vcf_done", ""),
         sample_mask=f"sample_{wildcards.subset_name}_subset_mask",
         site_mask=f"variant_{wildcards.subset_name}_subset_{wildcards.region_name}_region_{wildcards.filter_set}_mask",
-        ancestral_allele="variant_ancestral_allele",
+        ancestral_state="variant_ancestral_allele",
     )
     os.makedirs(data_dir / "progress" / "generate_ancestors", exist_ok=True)
     with open(
