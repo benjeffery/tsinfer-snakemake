@@ -1,0 +1,3 @@
+.snakemake/
+test_data/workflow/
+__pycache__
