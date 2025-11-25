@@ -12,12 +12,13 @@ sample_data = tsinfer.VariantData(
     site_mask=f"variant_{snakemake.wildcards.subset_name}_subset_{snakemake.wildcards.region_name}_region_{snakemake.wildcards.filter_set}_mask",
     ancestral_state="variant_ancestral_allele",
 )
-os.makedirs(data_dir / "progress" / "generate_ancestors", exist_ok=True)
-with open(
-    data_dir / "progress" / "generate_ancestors" / f"{snakemake.wildcards.subset_name}-"
-    + f"{snakemake.wildcards.region_name}-{snakemake.wildcards.filter_set}.log",
-    "w",
-) as log_f:
+logdir = data_dir / "progress" / "generate_ancestors"
+os.makedirs(logdir, exist_ok=True)
+logname = (
+    f"{snakemake.wildcards.subset_name}-"
+    + f"{snakemake.wildcards.region_name}-{snakemake.wildcards.filter_set}.log"
+)
+with open(logdir / logname, "w") as log_f:
     ancestors = tsinfer.generate_ancestors(
         sample_data,
         path=snakemake.output[0],

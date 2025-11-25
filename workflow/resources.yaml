@@ -13,7 +13,7 @@ generate_ancestors:
   threads: 32
   mem_mb: 64000 #This depends on chromosome size - see summary table output for advised size
   #time_min: 43800  # 1 month
-  time_min: 8640
+  time_min: 43800
 
 #Match ancestors group is special - it will scale these values based on the number of
 #ancestors in the group. These values are the maxiumums.
